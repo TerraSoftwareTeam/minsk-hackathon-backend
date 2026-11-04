@@ -7,9 +7,9 @@ RUN apk add --no-cache openssl
 COPY package*.json prisma.config.ts ./
 COPY prisma ./prisma/
 RUN npm ci
-RUN npx prisma generate
 
 COPY . .
+RUN npx prisma generate
 RUN npm run build && npm prune --omit=dev
 
 
