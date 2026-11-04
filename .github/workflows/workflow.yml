@@ -41,7 +41,7 @@ jobs:
     runs-on: ["self-hosted", "minsk-hackathon"]
     steps:
       - name: Update and restart
-        working-directory: /path/to/your/project
+        working-directory: /home/ubuntu/minsk-hackathon-backend
         run: |
           git pull
           docker compose up -d --build
