@@ -1,0 +1,49 @@
+name: CI/CD
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: postgresql://user:password@localhost:5432/test?schema=public
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Build
+        run: npm run build
+
+      - name: Unit tests
+        run: npm run test -- --ci
+
+  deploy:
+    needs: test
+    runs-on: ["self-hosted", "minsk-hackathon"]
+    steps:
+      - name: Update and restart
+        working-directory: /path/to/your/project
+        run: |
+          git pull
+          docker compose up -d --build
+          docker image prune -f
+          docker image prune -f
