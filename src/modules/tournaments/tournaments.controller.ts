@@ -7,6 +7,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -17,6 +18,7 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiParam,
+  ApiBadRequestResponse,
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
@@ -29,6 +31,11 @@ import {
   UpdateTournamentDto,
 } from './dto/tournament.dto';
 import { StageView, TournamentsService } from './tournaments.service';
+import {
+  TournamentTreeDto,
+  TournamentTreeQueryDto,
+} from './tree/tournament-tree.dto';
+import { TournamentTreeService } from './tree/tournament-tree.service';
 
 @ApiTags('Tournaments')
 @ApiBearerAuth()
@@ -36,7 +43,10 @@ import { StageView, TournamentsService } from './tournaments.service';
 @UseGuards(JwtAuthGuard)
 @Controller('tournaments')
 export class TournamentsController {
-  constructor(private readonly tournaments: TournamentsService) {}
+  constructor(
+    private readonly tournaments: TournamentsService,
+    private readonly tree: TournamentTreeService,
+  ) {}
 
   @Post()
   @ApiOperation({
@@ -114,5 +124,25 @@ export class TournamentsController {
     @Param('type', new ParseEnumPipe(StageType)) type: StageType,
   ): Promise<StageView> {
     return this.tournaments.getStage(id, type);
+  }
+
+  @Get(':id/tree')
+  @ApiOperation({
+    summary: 'Tournament tree for rendering brackets',
+    description: [
+      'stages (SCHOOL, DISTRICT, CITY) → brackets (per school / district / city) → rounds (columns) → matches.',
+      'Each match has teamA/teamB slots with a ready-to-show `label`, `sourceMatchId` (feeder) and `nextMatchId` (where the winner goes).',
+      '`layout` gives CSS grid placement: column = round - 1, rows rowStart..rowStart+rowSpan in units of first-round matches; the bracket has `gridRows` rows.',
+      'Filters: ?stage=SCHOOL&schoolId=… for one school, ?stage=DISTRICT&district=… for one district, ?stage=CITY for the final stage.',
+    ].join(' '),
+  })
+  @ApiOkResponse({ type: TournamentTreeDto })
+  @ApiBadRequestResponse({ description: 'Filter does not match the stage' })
+  @ApiNotFoundResponse({ description: 'Tournament not found' })
+  getTree(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: TournamentTreeQueryDto,
+  ): Promise<TournamentTreeDto> {
+    return this.tree.getTree(id, query);
   }
 }

@@ -21,6 +21,7 @@ import { GamesService } from '../src/modules/tournaments/games.service';
 import { StageEngineService } from '../src/modules/tournaments/stage-engine.service';
 import { TeamsService } from '../src/modules/tournaments/teams.service';
 import { TournamentsService } from '../src/modules/tournaments/tournaments.service';
+import { TournamentTreeService } from '../src/modules/tournaments/tree/tournament-tree.service';
 
 const enabled = (process.env.DATABASE_NAME ?? '').endsWith('-test');
 const suite = enabled ? describe : describe.skip;
@@ -33,6 +34,7 @@ suite('Tournament flow (real DB)', () => {
   let teams: TeamsService;
   let games: GamesService;
   let engine: StageEngineService;
+  let tree: TournamentTreeService;
 
   let organizator: User;
   const teachers: Record<string, User> = {};
@@ -91,6 +93,7 @@ suite('Tournament flow (real DB)', () => {
     tournaments = new TournamentsService(prisma);
     teams = new TeamsService(prisma);
     games = new GamesService(prisma, engine);
+    tree = new TournamentTreeService(prisma);
 
     await prisma.school.createMany({ data: Object.values(schools) });
     organizator = await makeUser(UserRoles.ORGANIZATOR, null);
@@ -434,6 +437,57 @@ suite('Tournament flow (real DB)', () => {
       (await tournaments.getStage(tournamentId, StageType.CITY)).brackets[0]
         .winnerTeamId,
     );
+  });
+
+  it('tree: whole tournament and filtered views', async () => {
+    const full = await tree.getTree(tournamentId, {});
+    expect(full.stages.map((s) => s.type)).toEqual([
+      'SCHOOL',
+      'DISTRICT',
+      'CITY',
+    ]);
+    expect(full.winner).not.toBeNull();
+    const city = full.stages[2];
+    expect(city.brackets[0]).toMatchObject({
+      title: 'Город',
+      outcome: 'WINNER',
+      roundsCount: 1,
+    });
+    expect(city.brackets[0].rounds[0].matches[0].teamA.isWinner).toBe(true);
+    expect(
+      city.districts!.filter((d) => d.status === 'QUALIFIED'),
+    ).toHaveLength(2);
+
+    const a1 = await prisma.school.findUniqueOrThrow({ where: { name: 'A1' } });
+    const one = await tree.getTree(tournamentId, {
+      stage: StageType.SCHOOL,
+      schoolId: a1.id,
+    });
+    expect(one.stages).toHaveLength(1);
+    expect(one.stages[0].brackets).toHaveLength(1);
+    const b = one.stages[0].brackets[0];
+    expect(b.rounds.map((r) => r.name)).toEqual(['Полуфинал', 'Финал']);
+    expect(b.rounds[0].matches.filter((m) => m.isBye)).toHaveLength(1);
+    const final = b.rounds[1].matches[0];
+    expect(
+      new Set([final.teamA.sourceMatchId, final.teamB.sourceMatchId]),
+    ).toEqual(new Set(b.rounds[0].matches.map((m) => m.id)));
+
+    const district = await tree.getTree(tournamentId, {
+      stage: StageType.DISTRICT,
+      district: District.SOVETSKY,
+    });
+    expect(district.stages[0].brackets).toHaveLength(1);
+    expect(district.stages[0].brackets[0]).toMatchObject({
+      title: 'Советский район',
+      outcome: 'NO_PARTICIPANTS',
+    });
+
+    expect(
+      await status(
+        tree.getTree(tournamentId, { stage: StageType.CITY, schoolId: a1.id }),
+      ),
+    ).toBe(400);
   });
 
   it('a tournament without full teams finishes immediately with no winner', async () => {

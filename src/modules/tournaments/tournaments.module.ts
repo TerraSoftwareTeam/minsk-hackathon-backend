@@ -9,6 +9,7 @@ import { TeamsService } from './teams.service';
 import { TournamentScheduler } from './tournament.scheduler';
 import { TournamentsController } from './tournaments.controller';
 import { TournamentsService } from './tournaments.service';
+import { TournamentTreeService } from './tree/tournament-tree.service';
 
 @Module({
   imports: [PrismaModule, AuthModule],
@@ -19,6 +20,7 @@ import { TournamentsService } from './tournaments.service';
     GamesService,
     StageEngineService,
     TournamentScheduler,
+    TournamentTreeService,
   ],
 })
 export class TournamentsModule {}
