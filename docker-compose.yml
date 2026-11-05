@@ -8,7 +8,9 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: "postgresql://${DATABASE_USER}:${DATABASE_PASS}@db:5432/${DATABASE_NAME}?schema=public"
+      # Inside the compose network the database is reachable as "db", not 127.0.0.1
+      DATABASE_HOST: db
+      DATABASE_PORT: "5432"
       REDIS_URL: "redis://redis:6379"
     depends_on:
       db:
