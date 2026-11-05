@@ -5,14 +5,10 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { Prisma, User } from '../../../prisma/generated/prisma/client';
+import { Prisma, User, UserRoles } from '../../../prisma/generated/prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
-import {
-  AuthResponseDto,
-  LoginDto,
-  RegisterDto,
-  UserResponseDto,
-} from './dto/register.dto';
+import { toUserResponse } from '../users/user.mapper';
+import { AuthResponseDto, LoginDto, RegisterDto } from './dto/register.dto';
 
 @Injectable()
 export class AuthService {
@@ -60,14 +56,35 @@ export class AuthService {
   }
 
   async login(dto: LoginDto): Promise<AuthResponseDto> {
-    const user = await this.prisma.user.findUnique({
-      where: { schoolsById: dto.schoolsById },
-    });
+    const user = await this.findUserForLogin(dto);
     if (!user) {
-      throw new UnauthorizedException('Invalid schoolsById');
+      throw new UnauthorizedException('Invalid credentials');
     }
 
     return this.buildAuthResponse(user);
+  }
+
+  /**
+   * ORGANIZATOR is found by id; PUPIL/TEACHER by schoolsById.
+   * The role must match the stored one, so a teacher cannot log in as a pupil.
+   */
+  private findUserForLogin(dto: LoginDto): Promise<User | null> {
+    if (dto.role === UserRoles.ORGANIZATOR) {
+      // Guard against findFirst({ where: { id: undefined } }), which would match any row.
+      if (!dto.id) {
+        throw new BadRequestException('id is required for ORGANIZATOR');
+      }
+      return this.prisma.user.findFirst({
+        where: { id: dto.id, role: UserRoles.ORGANIZATOR },
+      });
+    }
+
+    if (!dto.schoolsById) {
+      throw new BadRequestException(`schoolsById is required for ${dto.role}`);
+    }
+    return this.prisma.user.findFirst({
+      where: { schoolsById: dto.schoolsById, role: dto.role },
+    });
   }
 
   private async buildAuthResponse(user: User): Promise<AuthResponseDto> {
@@ -76,20 +93,6 @@ export class AuthService {
       role: user.role,
     });
 
-    return { accessToken, user: this.toUserResponse(user) };
-  }
-
-  // Explicit field list: never leak extra columns added to the model later.
-  private toUserResponse(user: User): UserResponseDto {
-    return {
-      id: user.id,
-      schoolsById: user.schoolsById,
-      name: user.name,
-      surname: user.surname,
-      fathersName: user.fathersName,
-      class: user.class,
-      role: user.role,
-      schoolName: user.schoolName,
-    };
+    return { accessToken, user: toUserResponse(user) };
   }
 }
