@@ -40,7 +40,6 @@ export class AuthController {
           fathersName: 'Petrovich',
           role: UserRoles.PUPIL,
           class: '10A',
-          schoolName: 'School #1',
         },
       },
       teacher: {
@@ -52,7 +51,6 @@ export class AuthController {
           fathersName: 'Ivanovna',
           role: UserRoles.TEACHER,
           class: '10A',
-          schoolName: 'School #1',
         },
       },
     },

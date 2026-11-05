@@ -11,6 +11,5 @@ export function toUserResponse(user: User): UserResponseDto {
     fathersName: user.fathersName,
     class: user.class,
     role: user.role,
-    schoolName: user.schoolName,
   };
 }

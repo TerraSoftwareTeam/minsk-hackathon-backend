@@ -17,7 +17,6 @@ const storedUser = {
   fathersName: 'Petrovich',
   class: '10A',
   role: UserRoles.PUPIL,
-  schoolName: 'School #1',
 };
 
 const expectedUser = { ...storedUser };
@@ -29,7 +28,6 @@ const dto: RegisterDto = {
   fathersName: 'Petrovich',
   role: UserRoles.PUPIL,
   class: '10A',
-  schoolName: 'School #1',
 };
 
 describe('AuthService.register', () => {
@@ -82,7 +80,7 @@ describe('AuthService.login', () => {
 
   const pupilLogin: LoginDto = { role: UserRoles.PUPIL, schoolsById: 'school-user-1' };
   const adminId = '3f2c9a4e-1b7d-4e8a-9c0f-2a6b5d7e8f90';
-  const adminStored = { ...storedUser, id: adminId, role: UserRoles.ADMIN, schoolsById: null, class: null, schoolName: null };
+  const adminStored = { ...storedUser, id: adminId, role: UserRoles.ADMIN, schoolsById: null, class: null };
 
   beforeEach(() => {
     prisma = { user: { findFirst: jest.fn() } };

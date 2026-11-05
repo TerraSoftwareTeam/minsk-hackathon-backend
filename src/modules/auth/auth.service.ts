@@ -28,7 +28,6 @@ export class AuthService {
           fathersName: dto.fathersName,
           role: dto.role,
           class: dto.class,
-          schoolName: dto.schoolName,
         },
       });
     } catch (error) {

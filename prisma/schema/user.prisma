@@ -6,5 +6,4 @@ model User {
   fathersName String
   class       String?
   role        UserRoles @default(PUPIL)
-  schoolName  String?
 }

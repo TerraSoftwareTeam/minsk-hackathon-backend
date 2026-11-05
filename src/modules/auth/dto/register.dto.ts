@@ -50,14 +50,6 @@ export class RegisterDto {
   @IsString()
   @IsNotEmpty()
   class!: string;
-
-  @ApiProperty({
-    example: 'School #1',
-    description: 'School name',
-  })
-  @IsString()
-  @IsNotEmpty()
-  schoolName!: string;
 }
 
 /**

@@ -22,7 +22,4 @@ export class UserResponseDto {
 
   @ApiProperty({ enum: UserRoles, example: UserRoles.PUPIL })
   role!: UserRoles;
-
-  @ApiProperty({ example: 'School #1', nullable: true, type: String })
-  schoolName!: string | null;
 }
