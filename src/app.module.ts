@@ -8,6 +8,7 @@ import { HealthModule } from './modules/health/health.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { TournamentsModule } from './modules/tournaments/tournaments.module';
+import { EventsModule } from './modules/events/events.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { TournamentsModule } from './modules/tournaments/tournaments.module';
     AuthModule,
     UsersModule,
     TournamentsModule,
+    EventsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

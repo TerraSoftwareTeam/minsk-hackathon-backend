@@ -3,7 +3,7 @@ import {
   StageType,
 } from '../../../../prisma/generated/prisma/client';
 import { STAGE_ORDER } from '../stage-engine.service';
-import { TOURNAMENT_TIME_ZONE } from '../tournament-time';
+import { TOURNAMENT_TIME_ZONE } from '../../../common/time/minsk-time';
 import {
   TournamentTreeDto,
   TreeBracketDto,

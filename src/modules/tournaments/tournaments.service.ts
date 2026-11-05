@@ -21,7 +21,7 @@ import {
 import { ALL_DISTRICTS } from './stage-engine.service';
 import { assertOrganizator } from './tournament-access';
 import { lockTournament, lockTournamentCreation } from './tournament-locks';
-import { parseMinskDateTime, TOURNAMENT_TIME_ZONE } from './tournament-time';
+import { parseMinskDateTime, TOURNAMENT_TIME_ZONE } from '../../common/time/minsk-time';
 
 const TEAM_VIEW = {
   select: {

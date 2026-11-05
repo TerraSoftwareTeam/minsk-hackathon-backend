@@ -1,7 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 
 /**
- * Tournaments are configured in Europe/Minsk local time. Minsk has been fixed at
+ * Tournaments and events are configured in Europe/Minsk local time. Minsk has been fixed at
  * UTC+03:00 with no DST since 2011, so a constant offset is exact.
  * Values are always stored in UTC; clients convert for display.
  */

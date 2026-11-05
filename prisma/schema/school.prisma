@@ -5,4 +5,5 @@ model School {
   users    User[]
   teams    TournamentTeam[]
   brackets TournamentBracket[]
+  events   Event[]
 }
