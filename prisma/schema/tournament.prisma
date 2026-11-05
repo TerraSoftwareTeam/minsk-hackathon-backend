@@ -1,0 +1,64 @@
+/// A city-wide tournament. At most one tournament is not FINISHED at a time
+/// (enforced in TournamentsService under an advisory lock).
+model Tournament {
+  id                 String           @id @default(uuid())
+  name               String
+  status             TournamentStatus @default(REGISTRATION)
+  minTeamSize        Int
+  maxTeamSize        Int
+  /// Start of the school stage, stored in UTC. Same moment for every school.
+  schoolStageStartAt DateTime         @db.Timestamptz(3)
+  currentStage       StageType?
+  winnerTeam         TournamentTeam?  @relation("TournamentWinner", fields: [winnerTeamId], references: [id], onDelete: SetNull)
+  winnerTeamId       String?          @unique
+  createdAt          DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime         @updatedAt @db.Timestamptz(3)
+  finishedAt         DateTime?        @db.Timestamptz(3)
+
+  teams   TournamentTeam[]
+  members TeamMember[]
+  stages  TournamentStage[]
+  games   TournamentGame[]
+
+  @@index([status, schoolStageStartAt])
+}
+
+model TournamentStage {
+  id           String      @id @default(uuid())
+  tournament   Tournament  @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  tournamentId String
+  type         StageType
+  status       StageStatus @default(PENDING)
+  startedAt    DateTime?   @db.Timestamptz(3)
+  finishedAt   DateTime?   @db.Timestamptz(3)
+
+  brackets TournamentBracket[]
+  games    TournamentGame[]
+
+  @@unique([tournamentId, type])
+}
+
+/// One single-elimination bracket: per school (SCHOOL), per district (DISTRICT)
+/// or the single city bracket (CITY). Ends with at most one winner.
+model TournamentBracket {
+  id                String          @id @default(uuid())
+  stage             TournamentStage @relation(fields: [stageId], references: [id], onDelete: Cascade)
+  stageId           String
+  school            School?         @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  schoolId          String?
+  district          District?
+  status            BracketStatus   @default(IN_PROGRESS)
+  participantsCount Int
+  /// Bracket size (power of two), 0 when there are no participants.
+  size              Int
+  rounds            Int
+  winnerTeam        TournamentTeam? @relation("BracketWinner", fields: [winnerTeamId], references: [id], onDelete: SetNull)
+  winnerTeamId      String?
+  finishedAt        DateTime?       @db.Timestamptz(3)
+
+  games TournamentGame[]
+
+  @@unique([stageId, schoolId])
+  @@unique([stageId, district])
+  @@index([stageId, status])
+}
