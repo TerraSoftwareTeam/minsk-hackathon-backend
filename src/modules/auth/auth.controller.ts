@@ -60,7 +60,7 @@ export class AuthController {
     type: AuthResponseDto,
   })
   @ApiBadRequestResponse({
-    description: 'Validation failed (missing/invalid fields)',
+    description: 'Validation failed (missing/invalid fields), or a PUPIL registers into a class that has no teacher',
   })
   @ApiConflictResponse({ description: 'User with this schoolsById already exists' })
   register(@Body() dto: RegisterDto): Promise<AuthResponseDto> {

@@ -33,13 +33,17 @@ const dto: RegisterDto = {
 describe('AuthService.register', () => {
   let service: AuthService;
   let prisma: {
-    user: { create: jest.Mock };
+    user: { create: jest.Mock; findFirst: jest.Mock };
   };
   let jwt: { signAsync: jest.Mock };
 
   beforeEach(() => {
     prisma = {
-      user: { create: jest.fn() },
+      user: {
+        create: jest.fn(),
+        // By default the pupil's class has a teacher.
+        findFirst: jest.fn().mockResolvedValue({ id: 't1' }),
+      },
     };
     jwt = { signAsync: jest.fn().mockResolvedValue('signed.jwt.token') };
     service = new AuthService(
@@ -58,6 +62,42 @@ describe('AuthService.register', () => {
     });
     expect(jwt.signAsync).toHaveBeenCalledWith({ sub: 'u1', role: UserRoles.PUPIL });
     expect(result).toEqual({ accessToken: 'signed.jwt.token', user: expectedUser });
+  });
+
+  it('pupil: checks that the class has a teacher', async () => {
+    prisma.user.create.mockResolvedValue(storedUser);
+
+    await service.register(dto);
+
+    expect(prisma.user.findFirst).toHaveBeenCalledWith({
+      where: { role: UserRoles.TEACHER, class: '10A' },
+      select: { id: true },
+    });
+  });
+
+  it('pupil: BadRequest and no user created when the class has no teacher', async () => {
+    prisma.user.findFirst.mockResolvedValue(null);
+
+    await expect(service.register(dto)).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.user.create).not.toHaveBeenCalled();
+    expect(jwt.signAsync).not.toHaveBeenCalled();
+  });
+
+  it('teacher: registers without a teacher check (the first teacher opens the class)', async () => {
+    const teacherDto: RegisterDto = {
+      schoolsById: 'school-user-2',
+      name: 'Maria',
+      surname: 'Sidorova',
+      fathersName: 'Ivanovna',
+      role: UserRoles.TEACHER,
+      class: '10A',
+    };
+    prisma.user.create.mockResolvedValue({ ...storedUser, role: UserRoles.TEACHER });
+
+    await service.register(teacherDto);
+
+    expect(prisma.user.findFirst).not.toHaveBeenCalled();
+    expect(prisma.user.create).toHaveBeenCalledWith({ data: teacherDto });
   });
 
   it('throws Conflict when schoolsById is already taken', async () => {

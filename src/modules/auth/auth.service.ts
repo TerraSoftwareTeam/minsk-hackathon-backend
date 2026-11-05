@@ -18,6 +18,10 @@ export class AuthService {
   ) {}
 
   async register(dto: RegisterDto): Promise<AuthResponseDto> {
+    if (dto.role === UserRoles.PUPIL) {
+      await this.assertClassHasTeacher(dto.class);
+    }
+
     let user;
     try {
       user = await this.prisma.user.create({
@@ -43,6 +47,21 @@ export class AuthService {
     }
 
     return this.buildAuthResponse(user);
+  }
+
+  /**
+   * A pupil may join only an existing class, i.e. one that already has a teacher.
+   * Otherwise nobody could manage the pupil, and a typo in the class would
+   * silently create a new, orphaned class.
+   */
+  private async assertClassHasTeacher(className: string): Promise<void> {
+    const teacher = await this.prisma.user.findFirst({
+      where: { role: UserRoles.TEACHER, class: className },
+      select: { id: true },
+    });
+    if (!teacher) {
+      throw new BadRequestException(`Class "${className}" has no teacher yet`);
+    }
   }
 
   async login(dto: LoginDto): Promise<AuthResponseDto> {
