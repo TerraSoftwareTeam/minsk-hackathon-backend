@@ -35,14 +35,12 @@ const dto: RegisterDto = {
 describe('AuthService.register', () => {
   let service: AuthService;
   let prisma: {
-    school: { findUnique: jest.Mock };
     user: { create: jest.Mock };
   };
   let jwt: { signAsync: jest.Mock };
 
   beforeEach(() => {
     prisma = {
-      school: { findUnique: jest.fn() },
       user: { create: jest.fn() },
     };
     jwt = { signAsync: jest.fn().mockResolvedValue('signed.jwt.token') };
@@ -52,28 +50,19 @@ describe('AuthService.register', () => {
     );
   });
 
-  it('throws BadRequest when the school does not exist', async () => {
-    prisma.school.findUnique.mockResolvedValue(null);
-
-    await expect(service.register(dto)).rejects.toBeInstanceOf(BadRequestException);
-    expect(prisma.user.create).not.toHaveBeenCalled();
-  });
-
   it('creates the user and returns the JWT together with the user', async () => {
-    prisma.school.findUnique.mockResolvedValue({ id: 's1', name: 'School #1' });
     prisma.user.create.mockResolvedValue(storedUser);
 
     const result = await service.register(dto);
 
     expect(prisma.user.create).toHaveBeenCalledWith({
-      data: { ...dto, schoolName: 'School #1' },
+      data: dto,
     });
     expect(jwt.signAsync).toHaveBeenCalledWith({ sub: 'u1', role: UserRoles.PUPIL });
     expect(result).toEqual({ accessToken: 'signed.jwt.token', user: expectedUser });
   });
 
   it('throws Conflict when schoolsById is already taken', async () => {
-    prisma.school.findUnique.mockResolvedValue({ id: 's1', name: 'School #1' });
     prisma.user.create.mockRejectedValue(
       new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
         code: 'P2002',

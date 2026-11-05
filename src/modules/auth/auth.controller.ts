@@ -26,7 +26,7 @@ export class AuthController {
   @ApiOperation({
     summary: 'Register a new user',
     description:
-      'Creates a user linked to an existing school and returns a JWT access token. Public endpoint, no auth required.',
+      'Creates a user and returns a JWT access token. Public endpoint, no auth required.',
   })
   @ApiBody({
     type: RegisterDto,
@@ -62,7 +62,7 @@ export class AuthController {
     type: AuthResponseDto,
   })
   @ApiBadRequestResponse({
-    description: 'Validation failed (missing/invalid fields) or school does not exist',
+    description: 'Validation failed (missing/invalid fields)',
   })
   @ApiConflictResponse({ description: 'User with this schoolsById already exists' })
   register(@Body() dto: RegisterDto): Promise<AuthResponseDto> {

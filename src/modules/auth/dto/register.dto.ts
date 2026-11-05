@@ -8,10 +8,10 @@ import {
   ValidateIf,
 } from 'class-validator';
 import { UserRoles } from '../../../../prisma/generated/prisma/client';
-import { UserResponseDto } from '../../users/dto/user-response.dto';
+import { UserResponseDto } from './user-response.dto';
 
 // Self-registration can only create pupils and teachers.
-// Organizators are created by an existing organizator via the users module.
+// Organizators are not created through the API.
 const SELF_REGISTRABLE_ROLES = [UserRoles.PUPIL, UserRoles.TEACHER] as const;
 
 export class RegisterDto {
@@ -53,7 +53,7 @@ export class RegisterDto {
 
   @ApiProperty({
     example: 'School #1',
-    description: 'Name of an existing school (must exist in the database)',
+    description: 'School name',
   })
   @IsString()
   @IsNotEmpty()

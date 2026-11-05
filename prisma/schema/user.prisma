@@ -6,13 +6,5 @@ model User {
   fathersName String
   class       String?
   role        UserRoles @default(PUPIL)
-  school      School?   @relation(fields: [schoolName], references: [name])
   schoolName  String?
-
-  createdTeams    TournamentTeam[] @relation("TeamCreator")
-  teamMemberships TeamMember[]
-  reportedGames   TournamentGame[] @relation("GameResultBy")
-
-  createdEvents      Event[]             @relation("EventCreator")
-  eventRegistrations EventRegistration[]
 }

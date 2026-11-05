@@ -7,7 +7,7 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { Prisma, User, UserRoles } from '../../../prisma/generated/prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
-import { toUserResponse } from '../users/user.mapper';
+import { toUserResponse } from './user.mapper';
 import { AuthResponseDto, LoginDto, RegisterDto } from './dto/register.dto';
 
 @Injectable()
@@ -18,15 +18,6 @@ export class AuthService {
   ) {}
 
   async register(dto: RegisterDto): Promise<AuthResponseDto> {
-    const school = await this.prisma.school.findUnique({
-      where: { name: dto.schoolName },
-    });
-    if (!school) {
-      throw new BadRequestException(
-        `School "${dto.schoolName}" does not exist`,
-      );
-    }
-
     let user;
     try {
       user = await this.prisma.user.create({
@@ -37,7 +28,7 @@ export class AuthService {
           fathersName: dto.fathersName,
           role: dto.role,
           class: dto.class,
-          schoolName: school.name,
+          schoolName: dto.schoolName,
         },
       });
     } catch (error) {
