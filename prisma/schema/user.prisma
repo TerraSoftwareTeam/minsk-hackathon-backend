@@ -12,4 +12,7 @@ model User {
   createdTeams    TournamentTeam[] @relation("TeamCreator")
   teamMemberships TeamMember[]
   reportedGames   TournamentGame[] @relation("GameResultBy")
+
+  createdEvents      Event[]             @relation("EventCreator")
+  eventRegistrations EventRegistration[]
 }

@@ -1,0 +1,4 @@
+enum EventAccess {
+  SCHOOL
+  ALL
+}
