@@ -13,6 +13,7 @@ import {
  *   they created. Sees ALL events and the events of their school.
  * - PUPIL: sees ALL events and the events of their school; signs up and cancels
  *   while the event is active.
+ * - Participant lists of visible events are available to teachers and organizators only.
  */
 
 type EventScope = {
@@ -31,6 +32,12 @@ export function canViewEvent(actor: User, event: EventScope): boolean {
   if (actor.role === UserRoles.ORGANIZATOR) return true;
   if (event.access === EventAccess.ALL) return true;
   return event.school !== null && event.school.name === actor.schoolName;
+}
+
+export function canViewParticipants(actor: User): boolean {
+  return (
+    actor.role === UserRoles.ORGANIZATOR || actor.role === UserRoles.TEACHER
+  );
 }
 
 export function canManageEvent(actor: User, event: EventScope): boolean {

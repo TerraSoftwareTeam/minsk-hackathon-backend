@@ -178,7 +178,7 @@ suite('Events (real DB)', () => {
     expect(mine.map((x) => x.id)).toContain(e.id);
   });
 
-  it('everyone who sees the event sees participants; only the author or an organizator edits', async () => {
+  it('teachers and organizators see participants, pupils do not; only the author or an organizator edits', async () => {
     const e = await events.create(teacherA, {
       title: 'edit me',
       description: 'd',
@@ -189,7 +189,8 @@ suite('Events (real DB)', () => {
     await events.register(pupilsB[0], e.id);
 
     expect(await events.participants(teacherB, e.id)).toHaveLength(2);
-    expect(await events.participants(pupilsA[1], e.id)).toHaveLength(2);
+    expect(await status(events.participants(pupilsA[0], e.id))).toBe(403);
+    expect(await status(events.participants(pupilsA[1], e.id))).toBe(403);
     const list = await events.participants(teacherA, e.id);
     expect(list.map((p) => p.userId)).toEqual([pupilsA[0].id, pupilsB[0].id]);
     expect(await events.participants(organizator, e.id)).toHaveLength(2);

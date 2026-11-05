@@ -28,6 +28,7 @@ import {
   canCreateEvents,
   canManageEvent,
   canViewEvent,
+  canViewParticipants,
 } from './event-access';
 
 type Tx = Prisma.TransactionClient;
@@ -286,9 +287,14 @@ export class EventsService {
     return this.findOne(actor, id, now);
   }
 
-  /** Anyone who can see the event, signed up or not. Available after the event too. */
+  /** Teachers and organizators who can see the event. Available after the event too. */
   async participants(actor: User, id: string): Promise<EventParticipantDto[]> {
     await this.findVisible(this.prisma, actor, id);
+    if (!canViewParticipants(actor)) {
+      throw new ForbiddenException(
+        'Only teachers and organizators can see the participants',
+      );
+    }
     const rows = await this.prisma.eventRegistration.findMany({
       where: { eventId: id },
       orderBy: { registeredAt: 'asc' },

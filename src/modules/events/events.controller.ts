@@ -146,9 +146,10 @@ export class EventsController {
   @ApiOperation({
     summary: 'Pupils signed up for the event',
     description:
-      'Any user who can see the event, signed up or not. Also available after the event.',
+      'Teachers and organizators who can see the event. Also available after the event.',
   })
   @ApiOkResponse({ type: [EventParticipantDto] })
+  @ApiForbiddenResponse({ description: 'Not a teacher or an organizator' })
   @ApiNotFoundResponse({ description: HIDDEN })
   participants(
     @CurrentUser() actor: User,
