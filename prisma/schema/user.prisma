@@ -6,4 +6,7 @@ model User {
   fathersName String
   class       String?
   role        UserRoles @default(PUPIL)
+
+  initiatedEvents Event[] @relation("EventInitiator")
+  teacherEvents   Event[] @relation("EventTeacher")
 }
