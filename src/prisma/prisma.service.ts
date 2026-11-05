@@ -20,11 +20,11 @@ export class PrismaService
     super({ adapter });
   }
 
-  onModuleInit(): any {
-    this.$connect();
+  async onModuleInit(): Promise<void> {
+    await this.$connect();
   }
 
-  onModuleDestroy(): any {
-    this.$disconnect();
+  async onModuleDestroy(): Promise<void> {
+    await this.$disconnect();
   }
 }
