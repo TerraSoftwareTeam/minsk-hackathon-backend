@@ -5,7 +5,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { Prisma, User } from '../../../prisma/generated/prisma/client';
+import { Prisma, User, UserRoles } from '../../../prisma/generated/prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { toUserResponse } from '../users/user.mapper';
 import { AuthResponseDto, LoginDto, RegisterDto } from './dto/register.dto';
@@ -56,14 +56,35 @@ export class AuthService {
   }
 
   async login(dto: LoginDto): Promise<AuthResponseDto> {
-    const user = await this.prisma.user.findUnique({
-      where: { schoolsById: dto.schoolsById },
-    });
+    const user = await this.findUserForLogin(dto);
     if (!user) {
-      throw new UnauthorizedException('Invalid schoolsById');
+      throw new UnauthorizedException('Invalid credentials');
     }
 
     return this.buildAuthResponse(user);
+  }
+
+  /**
+   * ORGANIZATOR is found by id; PUPIL/TEACHER by schoolsById.
+   * The role must match the stored one, so a teacher cannot log in as a pupil.
+   */
+  private findUserForLogin(dto: LoginDto): Promise<User | null> {
+    if (dto.role === UserRoles.ORGANIZATOR) {
+      // Guard against findFirst({ where: { id: undefined } }), which would match any row.
+      if (!dto.id) {
+        throw new BadRequestException('id is required for ORGANIZATOR');
+      }
+      return this.prisma.user.findFirst({
+        where: { id: dto.id, role: UserRoles.ORGANIZATOR },
+      });
+    }
+
+    if (!dto.schoolsById) {
+      throw new BadRequestException(`schoolsById is required for ${dto.role}`);
+    }
+    return this.prisma.user.findFirst({
+      where: { schoolsById: dto.schoolsById, role: dto.role },
+    });
   }
 
   private async buildAuthResponse(user: User): Promise<AuthResponseDto> {
@@ -74,5 +95,4 @@ export class AuthService {
 
     return { accessToken, user: toUserResponse(user) };
   }
-
 }

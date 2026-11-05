@@ -1,5 +1,12 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsIn, IsNotEmpty, IsString } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  IsEnum,
+  IsIn,
+  IsNotEmpty,
+  IsString,
+  IsUUID,
+  ValidateIf,
+} from 'class-validator';
 import { UserRoles } from '../../../../prisma/generated/prisma/client';
 import { UserResponseDto } from '../../users/dto/user-response.dto';
 
@@ -53,14 +60,31 @@ export class RegisterDto {
   schoolName!: string;
 }
 
+/**
+ * PUPIL/TEACHER log in by schoolsById, ORGANIZATOR logs in by its id (UUID).
+ * Organizators cannot register; they only log in.
+ */
 export class LoginDto {
-  @ApiProperty({
+  @ApiProperty({ enum: UserRoles, example: UserRoles.PUPIL, description: 'Role of the user logging in' })
+  @IsEnum(UserRoles)
+  role!: UserRoles;
+
+  @ApiPropertyOptional({
     example: 'school-user-123',
-    description: 'User ID in the school system (must belong to an existing user)',
+    description: 'School-system ID. Required for PUPIL and TEACHER',
   })
+  @ValidateIf((o: LoginDto) => o.role !== UserRoles.ORGANIZATOR)
   @IsString()
   @IsNotEmpty()
-  schoolsById!: string;
+  schoolsById?: string;
+
+  @ApiPropertyOptional({
+    example: '3f2c9a4e-1b7d-4e8a-9c0f-2a6b5d7e8f90',
+    description: 'User id (UUID). Required for ORGANIZATOR',
+  })
+  @ValidateIf((o: LoginDto) => o.role === UserRoles.ORGANIZATOR)
+  @IsUUID()
+  id?: string;
 }
 
 export class AuthResponseDto {

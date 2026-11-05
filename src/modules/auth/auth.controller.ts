@@ -72,16 +72,20 @@ export class AuthController {
   @Post('login')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Log in by schoolsById',
+    summary: 'Log in',
     description:
-      'Returns a JWT access token for an existing user. Public endpoint, no auth required.',
+      'PUPIL and TEACHER log in by schoolsById; ORGANIZATOR logs in by id. Organizators cannot register, only log in. Public endpoint, no auth required.',
   })
   @ApiBody({
     type: LoginDto,
     examples: {
       pupil: {
-        summary: 'Login',
-        value: { schoolsById: 'school-user-123' },
+        summary: 'Pupil or teacher',
+        value: { role: UserRoles.PUPIL, schoolsById: 'school-user-123' },
+      },
+      organizator: {
+        summary: 'Organizator',
+        value: { role: UserRoles.ORGANIZATOR, id: '3f2c9a4e-1b7d-4e8a-9c0f-2a6b5d7e8f90' },
       },
     },
   })
@@ -89,8 +93,8 @@ export class AuthController {
     description: 'JWT and user returned',
     type: AuthResponseDto,
   })
-  @ApiBadRequestResponse({ description: 'Validation failed (missing/invalid fields)' })
-  @ApiUnauthorizedResponse({ description: 'No user with this schoolsById' })
+  @ApiBadRequestResponse({ description: 'Validation failed (missing schoolsById or id for the role)' })
+  @ApiUnauthorizedResponse({ description: 'No user with this role and identifier' })
   login(@Body() dto: LoginDto): Promise<AuthResponseDto> {
     return this.authService.login(dto);
   }
