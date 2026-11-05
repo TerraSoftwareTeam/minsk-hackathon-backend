@@ -1,0 +1,39 @@
+/// A bracket match. Rounds are 1-based; the final is round = bracket.rounds, position 0.
+/// BYE rows are first-round slots where one team advances without playing.
+model TournamentGame {
+  id           String            @id @default(uuid())
+  tournament   Tournament        @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  tournamentId String
+  stage        TournamentStage   @relation(fields: [stageId], references: [id], onDelete: Cascade)
+  stageId      String
+  bracket      TournamentBracket @relation(fields: [bracketId], references: [id], onDelete: Cascade)
+  bracketId    String
+  round        Int
+  position     Int
+  status       GameStatus        @default(PENDING)
+
+  teamA        TournamentTeam? @relation("GameTeamA", fields: [teamAId], references: [id], onDelete: Restrict)
+  teamAId      String?
+  teamB        TournamentTeam? @relation("GameTeamB", fields: [teamBId], references: [id], onDelete: Restrict)
+  teamBId      String?
+  scoreA       Int?
+  scoreB       Int?
+  winnerTeam   TournamentTeam? @relation("GameWinner", fields: [winnerTeamId], references: [id], onDelete: Restrict)
+  winnerTeamId String?
+
+  nextGame    TournamentGame?  @relation("GameAdvance", fields: [nextGameId], references: [id], onDelete: Cascade)
+  nextGameId  String?
+  nextSlot    GameSlot?
+  feederGames TournamentGame[] @relation("GameAdvance")
+
+  resultBy   User?     @relation("GameResultBy", fields: [resultById], references: [id], onDelete: SetNull)
+  resultById String?
+  finishedAt DateTime? @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+
+  @@unique([bracketId, round, position])
+  @@index([stageId, status])
+  @@index([nextGameId])
+  @@index([teamAId])
+  @@index([teamBId])
+}

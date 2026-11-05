@@ -8,4 +8,8 @@ model User {
   role        UserRoles @default(PUPIL)
   school      School?   @relation(fields: [schoolName], references: [name])
   schoolName  String?
+
+  createdTeams    TournamentTeam[] @relation("TeamCreator")
+  teamMemberships TeamMember[]
+  reportedGames   TournamentGame[] @relation("GameResultBy")
 }
