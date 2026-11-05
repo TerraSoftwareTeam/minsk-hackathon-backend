@@ -1,15 +1,21 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiBody,
   ApiConflictResponse,
   ApiCreatedResponse,
+  ApiOkResponse,
   ApiOperation,
   ApiTags,
+  ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { UserRoles } from '../../../prisma/generated/prisma/client';
 import { AuthService } from './auth.service';
-import { AuthTokenResponseDto, RegisterDto } from './dto/register.dto';
+import {
+  AuthResponseDto,
+  LoginDto,
+  RegisterDto,
+} from './dto/register.dto';
 
 @ApiTags('Auth')
 @Controller('auth')
@@ -52,14 +58,40 @@ export class AuthController {
     },
   })
   @ApiCreatedResponse({
-    description: 'User created; JWT returned',
-    type: AuthTokenResponseDto,
+    description: 'User created; JWT and user returned',
+    type: AuthResponseDto,
   })
   @ApiBadRequestResponse({
     description: 'Validation failed (missing/invalid fields) or school does not exist',
   })
   @ApiConflictResponse({ description: 'User with this schoolsById already exists' })
-  register(@Body() dto: RegisterDto): Promise<AuthTokenResponseDto> {
+  register(@Body() dto: RegisterDto): Promise<AuthResponseDto> {
     return this.authService.register(dto);
+  }
+
+  @Post('login')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Log in by schoolsById',
+    description:
+      'Returns a JWT access token for an existing user. Public endpoint, no auth required.',
+  })
+  @ApiBody({
+    type: LoginDto,
+    examples: {
+      pupil: {
+        summary: 'Login',
+        value: { schoolsById: 'school-user-123' },
+      },
+    },
+  })
+  @ApiOkResponse({
+    description: 'JWT and user returned',
+    type: AuthResponseDto,
+  })
+  @ApiBadRequestResponse({ description: 'Validation failed (missing/invalid fields)' })
+  @ApiUnauthorizedResponse({ description: 'No user with this schoolsById' })
+  login(@Body() dto: LoginDto): Promise<AuthResponseDto> {
+    return this.authService.login(dto);
   }
 }

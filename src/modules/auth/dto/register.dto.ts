@@ -44,7 +44,46 @@ export class RegisterDto {
   schoolName!: string;
 }
 
-export class AuthTokenResponseDto {
+export class LoginDto {
+  @ApiProperty({
+    example: 'school-user-123',
+    description: 'User ID in the school system (must belong to an existing user)',
+  })
+  @IsString()
+  @IsNotEmpty()
+  schoolsById!: string;
+}
+
+export class UserResponseDto {
+  @ApiProperty({ example: '3f2c9a4e-1b7d-4e8a-9c0f-2a6b5d7e8f90' })
+  id!: string;
+
+  @ApiProperty({ example: 'school-user-123' })
+  schoolsById!: string;
+
+  @ApiProperty({ example: 'Ivan' })
+  name!: string;
+
+  @ApiProperty({ example: 'Ivanov' })
+  surname!: string;
+
+  @ApiProperty({ example: 'Petrovich' })
+  fathersName!: string;
+
+  @ApiProperty({ example: '10A' })
+  class!: string;
+
+  @ApiProperty({ enum: UserRoles, example: UserRoles.PUPIL })
+  role!: UserRoles;
+
+  @ApiProperty({ example: 'School #1' })
+  schoolName!: string;
+}
+
+export class AuthResponseDto {
   @ApiProperty({ description: 'JWT access token' })
   accessToken!: string;
+
+  @ApiProperty({ type: UserResponseDto })
+  user!: UserResponseDto;
 }
