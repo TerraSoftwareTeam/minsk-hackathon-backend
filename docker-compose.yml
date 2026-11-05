@@ -4,11 +4,10 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     env_file:
       - .env
     environment:
-      # Inside the compose network the database is reachable as "db", not 127.0.0.1
       DATABASE_HOST: db
       DATABASE_PORT: "5432"
       REDIS_URL: "redis://redis:6379"
