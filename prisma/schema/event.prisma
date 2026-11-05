@@ -5,6 +5,8 @@ model Event {
   scope       Scopes        @default(CLASS)
   status      EventStatuses @default(ON_MODERATION)
 
+  declineReason String?
+
   initiator   User   @relation("EventInitiator", fields: [initiatorId], references: [id])
   initiatorId String
 
@@ -15,5 +17,5 @@ model Event {
   updatedAt DateTime @updatedAt
 
   @@index([initiatorId])
-  @@index([teacherId])
+  @@index([teacherId, status])
 }
