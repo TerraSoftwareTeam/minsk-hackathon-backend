@@ -74,7 +74,7 @@ export class AuthController {
   @ApiOperation({
     summary: 'Log in',
     description:
-      'PUPIL and TEACHER log in by schoolsById; ORGANIZATOR logs in by id. Organizators cannot register, only log in. Public endpoint, no auth required.',
+      'PUPIL and TEACHER log in by schoolsById; ADMIN logs in by id. Admins cannot register, only log in. Public endpoint, no auth required.',
   })
   @ApiBody({
     type: LoginDto,
@@ -83,9 +83,9 @@ export class AuthController {
         summary: 'Pupil or teacher',
         value: { role: UserRoles.PUPIL, schoolsById: 'school-user-123' },
       },
-      organizator: {
-        summary: 'Organizator',
-        value: { role: UserRoles.ORGANIZATOR, id: '3f2c9a4e-1b7d-4e8a-9c0f-2a6b5d7e8f90' },
+      admin: {
+        summary: 'Admin',
+        value: { role: UserRoles.ADMIN, id: '3f2c9a4e-1b7d-4e8a-9c0f-2a6b5d7e8f90' },
       },
     },
   })

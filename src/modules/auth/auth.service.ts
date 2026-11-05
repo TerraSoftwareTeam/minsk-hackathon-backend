@@ -56,17 +56,17 @@ export class AuthService {
   }
 
   /**
-   * ORGANIZATOR is found by id; PUPIL/TEACHER by schoolsById.
+   * ADMIN is found by id; PUPIL/TEACHER by schoolsById.
    * The role must match the stored one, so a teacher cannot log in as a pupil.
    */
   private findUserForLogin(dto: LoginDto): Promise<User | null> {
-    if (dto.role === UserRoles.ORGANIZATOR) {
+    if (dto.role === UserRoles.ADMIN) {
       // Guard against findFirst({ where: { id: undefined } }), which would match any row.
       if (!dto.id) {
-        throw new BadRequestException('id is required for ORGANIZATOR');
+        throw new BadRequestException('id is required for ADMIN');
       }
       return this.prisma.user.findFirst({
-        where: { id: dto.id, role: UserRoles.ORGANIZATOR },
+        where: { id: dto.id, role: UserRoles.ADMIN },
       });
     }
 

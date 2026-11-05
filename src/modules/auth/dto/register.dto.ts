@@ -11,7 +11,7 @@ import { UserRoles } from '../../../../prisma/generated/prisma/client';
 import { UserResponseDto } from './user-response.dto';
 
 // Self-registration can only create pupils and teachers.
-// Organizators are not created through the API.
+// Admins are not created through the API.
 const SELF_REGISTRABLE_ROLES = [UserRoles.PUPIL, UserRoles.TEACHER] as const;
 
 export class RegisterDto {
@@ -61,8 +61,8 @@ export class RegisterDto {
 }
 
 /**
- * PUPIL/TEACHER log in by schoolsById, ORGANIZATOR logs in by its id (UUID).
- * Organizators cannot register; they only log in.
+ * PUPIL/TEACHER log in by schoolsById, ADMIN logs in by its id (UUID).
+ * Admins cannot register; they only log in.
  */
 export class LoginDto {
   @ApiProperty({ enum: UserRoles, example: UserRoles.PUPIL, description: 'Role of the user logging in' })
@@ -73,16 +73,16 @@ export class LoginDto {
     example: 'school-user-123',
     description: 'School-system ID. Required for PUPIL and TEACHER',
   })
-  @ValidateIf((o: LoginDto) => o.role !== UserRoles.ORGANIZATOR)
+  @ValidateIf((o: LoginDto) => o.role !== UserRoles.ADMIN)
   @IsString()
   @IsNotEmpty()
   schoolsById?: string;
 
   @ApiPropertyOptional({
     example: '3f2c9a4e-1b7d-4e8a-9c0f-2a6b5d7e8f90',
-    description: 'User id (UUID). Required for ORGANIZATOR',
+    description: 'User id (UUID). Required for ADMIN',
   })
-  @ValidateIf((o: LoginDto) => o.role === UserRoles.ORGANIZATOR)
+  @ValidateIf((o: LoginDto) => o.role === UserRoles.ADMIN)
   @IsUUID()
   id?: string;
 }

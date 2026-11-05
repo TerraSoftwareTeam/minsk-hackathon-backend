@@ -81,8 +81,8 @@ describe('AuthService.login', () => {
   let jwt: { signAsync: jest.Mock };
 
   const pupilLogin: LoginDto = { role: UserRoles.PUPIL, schoolsById: 'school-user-1' };
-  const organizatorId = '3f2c9a4e-1b7d-4e8a-9c0f-2a6b5d7e8f90';
-  const orgStored = { ...storedUser, id: organizatorId, role: UserRoles.ORGANIZATOR, schoolsById: null, class: null, schoolName: null };
+  const adminId = '3f2c9a4e-1b7d-4e8a-9c0f-2a6b5d7e8f90';
+  const adminStored = { ...storedUser, id: adminId, role: UserRoles.ADMIN, schoolsById: null, class: null, schoolName: null };
 
   beforeEach(() => {
     prisma = { user: { findFirst: jest.fn() } };
@@ -119,30 +119,30 @@ describe('AuthService.login', () => {
     expect(prisma.user.findFirst).not.toHaveBeenCalled();
   });
 
-  it('organizator: finds by id and ORGANIZATOR role, ignores schoolsById', async () => {
-    prisma.user.findFirst.mockResolvedValue(orgStored);
+  it('admin: finds by id and ADMIN role, ignores schoolsById', async () => {
+    prisma.user.findFirst.mockResolvedValue(adminStored);
 
-    const result = await service.login({ role: UserRoles.ORGANIZATOR, id: organizatorId });
+    const result = await service.login({ role: UserRoles.ADMIN, id: adminId });
 
     expect(prisma.user.findFirst).toHaveBeenCalledWith({
-      where: { id: organizatorId, role: UserRoles.ORGANIZATOR },
+      where: { id: adminId, role: UserRoles.ADMIN },
     });
-    expect(result.user.role).toBe(UserRoles.ORGANIZATOR);
+    expect(result.user.role).toBe(UserRoles.ADMIN);
     expect(result.accessToken).toBe('signed.jwt.token');
   });
 
-  it('organizator: BadRequest without id and never queries with an undefined id', async () => {
+  it('admin: BadRequest without id and never queries with an undefined id', async () => {
     await expect(
-      service.login({ role: UserRoles.ORGANIZATOR }),
+      service.login({ role: UserRoles.ADMIN }),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(prisma.user.findFirst).not.toHaveBeenCalled();
   });
 
-  it('organizator: Unauthorized when the id belongs to a non-organizator', async () => {
+  it('admin: Unauthorized when the id belongs to a non-admin', async () => {
     prisma.user.findFirst.mockResolvedValue(null);
 
     await expect(
-      service.login({ role: UserRoles.ORGANIZATOR, id: organizatorId }),
+      service.login({ role: UserRoles.ADMIN, id: adminId }),
     ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 
