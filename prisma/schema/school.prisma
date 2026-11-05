@@ -1,6 +1,9 @@
 model School {
-  id       String   @id @default(uuid())
-  name     String   @unique
+  id       String              @id @default(uuid())
+  name     String              @unique
   district District
   users    User[]
+  teams    TournamentTeam[]
+  brackets TournamentBracket[]
+  events   Event[]
 }

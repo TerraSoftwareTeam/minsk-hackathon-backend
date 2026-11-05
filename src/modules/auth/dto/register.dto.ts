@@ -1,6 +1,18 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsEnum, IsNotEmpty, IsString } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  IsEnum,
+  IsIn,
+  IsNotEmpty,
+  IsString,
+  IsUUID,
+  ValidateIf,
+} from 'class-validator';
 import { UserRoles } from '../../../../prisma/generated/prisma/client';
+import { UserResponseDto } from '../../users/dto/user-response.dto';
+
+// Self-registration can only create pupils and teachers.
+// Organizators are created by an existing organizator via the users module.
+const SELF_REGISTRABLE_ROLES = [UserRoles.PUPIL, UserRoles.TEACHER] as const;
 
 export class RegisterDto {
   @ApiProperty({
@@ -26,8 +38,12 @@ export class RegisterDto {
   @IsNotEmpty()
   fathersName!: string;
 
-  @ApiProperty({ enum: UserRoles, example: UserRoles.PUPIL, description: 'User role' })
-  @IsEnum(UserRoles)
+  @ApiProperty({
+    enum: SELF_REGISTRABLE_ROLES,
+    example: UserRoles.PUPIL,
+    description: 'User role (PUPIL or TEACHER)',
+  })
+  @IsIn(SELF_REGISTRABLE_ROLES)
   role!: UserRoles;
 
   @ApiProperty({ example: '10A', description: 'Class name' })
@@ -44,40 +60,31 @@ export class RegisterDto {
   schoolName!: string;
 }
 
+/**
+ * PUPIL/TEACHER log in by schoolsById, ORGANIZATOR logs in by its id (UUID).
+ * Organizators cannot register; they only log in.
+ */
 export class LoginDto {
-  @ApiProperty({
-    example: 'school-user-123',
-    description: 'User ID in the school system (must belong to an existing user)',
-  })
-  @IsString()
-  @IsNotEmpty()
-  schoolsById!: string;
-}
-
-export class UserResponseDto {
-  @ApiProperty({ example: '3f2c9a4e-1b7d-4e8a-9c0f-2a6b5d7e8f90' })
-  id!: string;
-
-  @ApiProperty({ example: 'school-user-123' })
-  schoolsById!: string;
-
-  @ApiProperty({ example: 'Ivan' })
-  name!: string;
-
-  @ApiProperty({ example: 'Ivanov' })
-  surname!: string;
-
-  @ApiProperty({ example: 'Petrovich' })
-  fathersName!: string;
-
-  @ApiProperty({ example: '10A' })
-  class!: string;
-
-  @ApiProperty({ enum: UserRoles, example: UserRoles.PUPIL })
+  @ApiProperty({ enum: UserRoles, example: UserRoles.PUPIL, description: 'Role of the user logging in' })
+  @IsEnum(UserRoles)
   role!: UserRoles;
 
-  @ApiProperty({ example: 'School #1' })
-  schoolName!: string;
+  @ApiPropertyOptional({
+    example: 'school-user-123',
+    description: 'School-system ID. Required for PUPIL and TEACHER',
+  })
+  @ValidateIf((o: LoginDto) => o.role !== UserRoles.ORGANIZATOR)
+  @IsString()
+  @IsNotEmpty()
+  schoolsById?: string;
+
+  @ApiPropertyOptional({
+    example: '3f2c9a4e-1b7d-4e8a-9c0f-2a6b5d7e8f90',
+    description: 'User id (UUID). Required for ORGANIZATOR',
+  })
+  @ValidateIf((o: LoginDto) => o.role === UserRoles.ORGANIZATOR)
+  @IsUUID()
+  id?: string;
 }
 
 export class AuthResponseDto {

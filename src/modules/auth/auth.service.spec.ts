@@ -88,13 +88,15 @@ describe('AuthService.register', () => {
 
 describe('AuthService.login', () => {
   let service: AuthService;
-  let prisma: { user: { findUnique: jest.Mock } };
+  let prisma: { user: { findFirst: jest.Mock } };
   let jwt: { signAsync: jest.Mock };
 
-  const loginDto: LoginDto = { schoolsById: 'school-user-1' };
+  const pupilLogin: LoginDto = { role: UserRoles.PUPIL, schoolsById: 'school-user-1' };
+  const organizatorId = '3f2c9a4e-1b7d-4e8a-9c0f-2a6b5d7e8f90';
+  const orgStored = { ...storedUser, id: organizatorId, role: UserRoles.ORGANIZATOR, schoolsById: null, class: null, schoolName: null };
 
   beforeEach(() => {
-    prisma = { user: { findUnique: jest.fn() } };
+    prisma = { user: { findFirst: jest.fn() } };
     jwt = { signAsync: jest.fn().mockResolvedValue('signed.jwt.token') };
     service = new AuthService(
       prisma as unknown as PrismaService,
@@ -102,29 +104,63 @@ describe('AuthService.login', () => {
     );
   });
 
-  it('throws Unauthorized when no user has this schoolsById', async () => {
-    prisma.user.findUnique.mockResolvedValue(null);
+  it('pupil/teacher: finds by schoolsById and the given role', async () => {
+    prisma.user.findFirst.mockResolvedValue(storedUser);
 
-    await expect(service.login(loginDto)).rejects.toBeInstanceOf(UnauthorizedException);
-    expect(jwt.signAsync).not.toHaveBeenCalled();
-  });
+    const result = await service.login(pupilLogin);
 
-  it('returns the JWT together with the user for an existing user', async () => {
-    prisma.user.findUnique.mockResolvedValue(storedUser);
-
-    const result = await service.login(loginDto);
-
-    expect(prisma.user.findUnique).toHaveBeenCalledWith({
-      where: { schoolsById: 'school-user-1' },
+    expect(prisma.user.findFirst).toHaveBeenCalledWith({
+      where: { schoolsById: 'school-user-1', role: UserRoles.PUPIL },
     });
     expect(jwt.signAsync).toHaveBeenCalledWith({ sub: 'u1', role: UserRoles.PUPIL });
     expect(result).toEqual({ accessToken: 'signed.jwt.token', user: expectedUser });
   });
 
-  it('does not expose fields outside the explicit user response', async () => {
-    prisma.user.findUnique.mockResolvedValue({ ...storedUser, secretColumn: 'x' });
+  it('pupil/teacher: Unauthorized when no matching user (wrong schoolsById or role)', async () => {
+    prisma.user.findFirst.mockResolvedValue(null);
 
-    const result = await service.login(loginDto);
+    await expect(service.login(pupilLogin)).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(jwt.signAsync).not.toHaveBeenCalled();
+  });
+
+  it('pupil/teacher: BadRequest without schoolsById, no DB query', async () => {
+    await expect(
+      service.login({ role: UserRoles.TEACHER }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.user.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('organizator: finds by id and ORGANIZATOR role, ignores schoolsById', async () => {
+    prisma.user.findFirst.mockResolvedValue(orgStored);
+
+    const result = await service.login({ role: UserRoles.ORGANIZATOR, id: organizatorId });
+
+    expect(prisma.user.findFirst).toHaveBeenCalledWith({
+      where: { id: organizatorId, role: UserRoles.ORGANIZATOR },
+    });
+    expect(result.user.role).toBe(UserRoles.ORGANIZATOR);
+    expect(result.accessToken).toBe('signed.jwt.token');
+  });
+
+  it('organizator: BadRequest without id and never queries with an undefined id', async () => {
+    await expect(
+      service.login({ role: UserRoles.ORGANIZATOR }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.user.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('organizator: Unauthorized when the id belongs to a non-organizator', async () => {
+    prisma.user.findFirst.mockResolvedValue(null);
+
+    await expect(
+      service.login({ role: UserRoles.ORGANIZATOR, id: organizatorId }),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('does not expose fields outside the explicit user response', async () => {
+    prisma.user.findFirst.mockResolvedValue({ ...storedUser, secretColumn: 'x' });
+
+    const result = await service.login(pupilLogin);
 
     expect(result.user).not.toHaveProperty('secretColumn');
   });
