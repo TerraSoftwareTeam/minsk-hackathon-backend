@@ -1,11 +1,11 @@
 model User {
   id          String    @id @default(uuid())
-  schoolsById String    @unique
+  schoolsById String?   @unique
   name        String
   surname     String
   fathersName String
-  class       String
+  class       String?
   role        UserRoles @default(PUPIL)
-  school      School    @relation(fields: [schoolName], references: [name])
-  schoolName  String
+  school      School?   @relation(fields: [schoolName], references: [name])
+  schoolName  String?
 }

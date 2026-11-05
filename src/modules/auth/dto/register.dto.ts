@@ -1,6 +1,11 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEnum, IsNotEmpty, IsString } from 'class-validator';
+import { IsIn, IsNotEmpty, IsString } from 'class-validator';
 import { UserRoles } from '../../../../prisma/generated/prisma/client';
+import { UserResponseDto } from '../../users/dto/user-response.dto';
+
+// Self-registration can only create pupils and teachers.
+// Organizators are created by an existing organizator via the users module.
+const SELF_REGISTRABLE_ROLES = [UserRoles.PUPIL, UserRoles.TEACHER] as const;
 
 export class RegisterDto {
   @ApiProperty({
@@ -26,8 +31,12 @@ export class RegisterDto {
   @IsNotEmpty()
   fathersName!: string;
 
-  @ApiProperty({ enum: UserRoles, example: UserRoles.PUPIL, description: 'User role' })
-  @IsEnum(UserRoles)
+  @ApiProperty({
+    enum: SELF_REGISTRABLE_ROLES,
+    example: UserRoles.PUPIL,
+    description: 'User role (PUPIL or TEACHER)',
+  })
+  @IsIn(SELF_REGISTRABLE_ROLES)
   role!: UserRoles;
 
   @ApiProperty({ example: '10A', description: 'Class name' })
@@ -52,32 +61,6 @@ export class LoginDto {
   @IsString()
   @IsNotEmpty()
   schoolsById!: string;
-}
-
-export class UserResponseDto {
-  @ApiProperty({ example: '3f2c9a4e-1b7d-4e8a-9c0f-2a6b5d7e8f90' })
-  id!: string;
-
-  @ApiProperty({ example: 'school-user-123' })
-  schoolsById!: string;
-
-  @ApiProperty({ example: 'Ivan' })
-  name!: string;
-
-  @ApiProperty({ example: 'Ivanov' })
-  surname!: string;
-
-  @ApiProperty({ example: 'Petrovich' })
-  fathersName!: string;
-
-  @ApiProperty({ example: '10A' })
-  class!: string;
-
-  @ApiProperty({ enum: UserRoles, example: UserRoles.PUPIL })
-  role!: UserRoles;
-
-  @ApiProperty({ example: 'School #1' })
-  schoolName!: string;
 }
 
 export class AuthResponseDto {

@@ -7,12 +7,8 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { Prisma, User } from '../../../prisma/generated/prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
-import {
-  AuthResponseDto,
-  LoginDto,
-  RegisterDto,
-  UserResponseDto,
-} from './dto/register.dto';
+import { toUserResponse } from '../users/user.mapper';
+import { AuthResponseDto, LoginDto, RegisterDto } from './dto/register.dto';
 
 @Injectable()
 export class AuthService {
@@ -76,20 +72,7 @@ export class AuthService {
       role: user.role,
     });
 
-    return { accessToken, user: this.toUserResponse(user) };
+    return { accessToken, user: toUserResponse(user) };
   }
 
-  // Explicit field list: never leak extra columns added to the model later.
-  private toUserResponse(user: User): UserResponseDto {
-    return {
-      id: user.id,
-      schoolsById: user.schoolsById,
-      name: user.name,
-      surname: user.surname,
-      fathersName: user.fathersName,
-      class: user.class,
-      role: user.role,
-      schoolName: user.schoolName,
-    };
-  }
 }
