@@ -42,6 +42,19 @@ const RECENT = new Date(Date.now() - DAY_MS);
 /** Created more than a month ago: past the decision deadline. */
 const OVERDUE = new Date(Date.now() - 31 * DAY_MS);
 
+const WITH_USERS_INCLUDE = {
+  initiator: true,
+  teacher: true,
+  image: { select: { url: true } },
+  votes: { select: { voter: true }, orderBy: { createdAt: 'asc' } },
+};
+
+/** `count` voters; the first one is `first` if given. */
+const voters = (count: number, first?: User) =>
+  Array.from({ length: count }, (_, i) => ({
+    voter: i === 0 && first ? first : user({ id: `voter-${i}`, schoolsById: `v${i}` }),
+  }));
+
 const storedEvent = (over: Partial<EventWithUsers> = {}): EventWithUsers => ({
   id: 'event-1',
   name: 'Trip',
@@ -60,6 +73,7 @@ const storedEvent = (over: Partial<EventWithUsers> = {}): EventWithUsers => ({
   updatedAt: RECENT,
   imageId: null,
   image: null,
+  votes: [],
   ...over,
 });
 
@@ -148,8 +162,8 @@ describe('EventsService', () => {
         initiatorId: pupil.id,
         teacherId: teacher.id,
       });
-      expect(result.initiator.id).toBe(pupil.id);
-      expect(result.teacher?.id).toBe(teacher.id);
+      expect(result.initiator).toEqual({ name: pupil.name, surname: pupil.surname });
+      expect(result.teacher).toEqual({ name: teacher.name, surname: teacher.surname });
       expect(notifier.awaitsTeacher).toHaveBeenCalledWith(storedEvent());
     });
 
@@ -189,7 +203,7 @@ describe('EventsService', () => {
         where: { teacherId: null, initiator: { class: '10A' } },
         data: { teacherId: teacher.id },
       });
-      expect(result.teacher?.id).toBe(teacher.id);
+      expect(result.teacher).toEqual({ name: teacher.name, surname: teacher.surname });
       expect(notifier.awaitsTeacher).toHaveBeenCalledWith(storedEvent());
     });
 
@@ -239,7 +253,7 @@ describe('EventsService', () => {
           status: EventStatuses.ON_MODERATION,
           createdAt: { gt: expect.any(Date) },
         },
-        include: { initiator: true, teacher: true, image: { select: { url: true } } },
+        include: WITH_USERS_INCLUDE,
         orderBy: { createdAt: 'asc' },
       });
       expect(result).toHaveLength(1);
@@ -358,20 +372,34 @@ describe('EventsService', () => {
     });
   });
 
+  describe('voters in every event response', () => {
+    it('lists every voter in vote order; every user of the event has only name and surname', async () => {
+      prisma.event.findUnique.mockResolvedValue(
+        storedEvent({ status: EventStatuses.ON_VOTE, votes: voters(2, otherPupil) }),
+      );
+
+      const result = await service.findOne(teacher, 'event-1');
+
+      expect(result.votesCount).toBe(2);
+      expect(result.voters).toEqual([
+        { name: otherPupil.name, surname: otherPupil.surname },
+        { name: 'N', surname: 'S' },
+      ]);
+      expect(result.initiator).toEqual({ name: pupil.name, surname: pupil.surname });
+      expect(result.teacher).toEqual({ name: teacher.name, surname: teacher.surname });
+    });
+  });
+
   describe('findMine', () => {
     it("returns the author's events in any status, newest first, with vote counts", async () => {
       prisma.event.findMany.mockResolvedValue([
         {
           ...storedEvent({ id: 'e2', status: EventStatuses.DECLINED }),
-          votes: [],
           likes: [],
-          _count: { votes: 0 },
         },
         {
-          ...storedEvent({ id: 'e1', status: EventStatuses.ON_VOTE }),
-          votes: [{ voterId: pupil.id }],
+          ...storedEvent({ id: 'e1', status: EventStatuses.ON_VOTE, votes: voters(4, pupil) }),
           likes: [{ userId: pupil.id }],
-          _count: { votes: 4 },
         },
       ]);
 
@@ -380,12 +408,8 @@ describe('EventsService', () => {
       expect(prisma.event.findMany).toHaveBeenCalledWith({
         where: { initiatorId: pupil.id },
         include: {
-          initiator: true,
-          teacher: true,
-          image: { select: { url: true } },
-          votes: { where: { voterId: pupil.id }, select: { voterId: true } },
+          ...WITH_USERS_INCLUDE,
           likes: { where: { userId: pupil.id }, select: { userId: true } },
-          _count: { select: { votes: true } },
         },
         orderBy: { createdAt: 'desc' },
       });
@@ -393,8 +417,10 @@ describe('EventsService', () => {
         ['e2', EventStatuses.DECLINED, 0],
         ['e1', EventStatuses.ON_VOTE, 4],
       ]);
-      expect(result[1].hasVoted).toBe(true);
+      expect(result.map((e) => e.hasVoted)).toEqual([false, true]);
       expect(result.map((e) => e.likedByMe)).toEqual([false, true]);
+      expect(result[1].voters).toHaveLength(4);
+      expect(result[1].voters[0]).toEqual({ name: pupil.name, surname: pupil.surname });
     });
 
     it.each([
@@ -411,17 +437,16 @@ describe('EventsService', () => {
       id: string,
       scope: Scopes,
       initiatorClass: string,
-      over: { votes?: { voterId: string }[]; votesCount?: number; liked?: boolean } = {},
+      over: { votesCount?: number; votedByMe?: boolean; liked?: boolean } = {},
     ) => ({
       ...storedEvent({
         id,
         scope,
         status: EventStatuses.ON_VOTE,
         initiator: { ...otherPupil, class: initiatorClass },
+        votes: voters(over.votesCount ?? 0, over.votedByMe ? pupil : undefined),
       }),
-      votes: over.votes ?? [],
       likes: over.liked ? [{ userId: pupil.id }] : [],
-      _count: { votes: over.votesCount ?? 0 },
     });
 
     it('queries ON_VOTE events of the pupil scope with their vote state, newest first', async () => {
@@ -440,12 +465,8 @@ describe('EventsService', () => {
           ],
         },
         include: {
-          initiator: true,
-          teacher: true,
-          image: { select: { url: true } },
-          votes: { where: { voterId: pupil.id }, select: { voterId: true } },
+          ...WITH_USERS_INCLUDE,
           likes: { where: { userId: pupil.id }, select: { userId: true } },
-          _count: { select: { votes: true } },
         },
         orderBy: { createdAt: 'desc' },
       });
@@ -455,8 +476,8 @@ describe('EventsService', () => {
       prisma.event.findMany.mockResolvedValue([
         votingEvent('school', Scopes.SCHOOL, '5A'),
         votingEvent('grade-same', Scopes.GRADE, '10Б', {
-          votes: [{ voterId: pupil.id }],
           votesCount: 7,
+          votedByMe: true,
           liked: true,
         }),
         votingEvent('grade-other', Scopes.GRADE, '11A'),
@@ -472,6 +493,17 @@ describe('EventsService', () => {
       expect(result[0]).not.toHaveProperty('votes');
       expect(result[0]).not.toHaveProperty('likes');
       expect(result[0]).not.toHaveProperty('_count');
+    });
+
+    it('hasVoted is false when only other pupils voted', async () => {
+      prisma.event.findMany.mockResolvedValue([
+        votingEvent('school', Scopes.SCHOOL, '5A', { votesCount: 3 }),
+      ]);
+
+      const [event] = await service.findForVoting(pupil);
+
+      expect(event).toMatchObject({ votesCount: 3, hasVoted: false });
+      expect(event.voters).toHaveLength(3);
     });
 
     it.each([
@@ -495,7 +527,7 @@ describe('EventsService', () => {
 
       expect(prisma.event.findMany).toHaveBeenCalledWith({
         where: { status: EventStatuses.ON_ADMIN_MODERATION, createdAt: { gt: expect.any(Date) } },
-        include: { initiator: true, teacher: true, image: { select: { url: true } } },
+        include: WITH_USERS_INCLUDE,
         orderBy: { createdAt: 'asc' },
       });
     });

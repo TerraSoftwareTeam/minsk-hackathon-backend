@@ -56,15 +56,19 @@ export const LIKABLE_STATUSES = [
   EventStatuses.DECLINED_BY_ADMIN,
 ] as const;
 
-const WITH_USERS = { initiator: true, teacher: true, image: { select: { url: true } } } as const;
+/** Everything an event response needs: its users (initiator, teacher, every voter) and image. */
+const WITH_USERS = {
+  initiator: true,
+  teacher: true,
+  image: { select: { url: true } },
+  votes: { select: { voter: true }, orderBy: { createdAt: 'asc' } },
+} as const;
 
-/** WITH_USERS plus the caller's own vote and like (0 or 1 rows each) and the total vote count. */
+/** WITH_USERS plus the caller's own like (0 or 1 rows). */
 const withVoteState = (userId: string) =>
   ({
     ...WITH_USERS,
-    votes: { where: { voterId: userId }, select: { voterId: true } },
     likes: { where: { userId }, select: { userId: true } },
-    _count: { select: { votes: true } },
   }) as const;
 
 /**
@@ -223,7 +227,9 @@ export class EventsService {
       include: withVoteState(actor.id),
       orderBy: { createdAt: 'desc' },
     });
-    return this.toResponses(events, toVotingEventResponse);
+    return this.toResponses(events, (event, computed) =>
+      toVotingEventResponse(event, computed, actor.id),
+    );
   }
 
   /**
@@ -252,7 +258,7 @@ export class EventsService {
     });
     return this.toResponses(
       events.filter((event) => this.isInScope(actor.class, event.initiator.class, event.scope)),
-      toVotingEventResponse,
+      (event, computed) => toVotingEventResponse(event, computed, actor.id),
     );
   }
 

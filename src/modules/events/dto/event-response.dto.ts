@@ -4,7 +4,7 @@ import {
   EventStatuses,
   Scopes,
 } from '../../../../prisma/generated/prisma/client';
-import { UserResponseDto } from '../../auth/dto/user-response.dto';
+import { EventUserResponseDto } from './event-user-response.dto';
 
 export class EventResponseDto {
   @ApiProperty({ example: '3f2c9a4e-1b7d-4e8a-9c0f-2a6b5d7e8f90', format: 'uuid' })
@@ -92,16 +92,25 @@ export class EventResponseDto {
   })
   likesCount!: number;
 
-  @ApiProperty({ type: UserResponseDto, description: 'Pupil who created the event' })
-  initiator!: UserResponseDto;
+  @ApiProperty({ type: EventUserResponseDto, description: 'Pupil who created the event' })
+  initiator!: EventUserResponseDto;
 
   @ApiProperty({
-    type: UserResponseDto,
+    type: EventUserResponseDto,
     nullable: true,
     description:
       "Teacher who moderates the event. Null while the author's class has no teacher: the first teacher who registers into the class gets the event",
   })
-  teacher!: UserResponseDto | null;
+  teacher!: EventUserResponseDto | null;
+
+  @ApiProperty({
+    type: [EventUserResponseDto],
+    description: 'Pupils who voted for (signed up to) the event, in the order they voted',
+  })
+  voters!: EventUserResponseDto[];
+
+  @ApiProperty({ type: 'integer', example: 4, description: 'Votes cast so far: the length of voters' })
+  votesCount!: number;
 
   @ApiProperty({ example: '2026-11-06T10:00:00.000Z', description: 'When the request was created (UTC)' })
   createdAt!: Date;
