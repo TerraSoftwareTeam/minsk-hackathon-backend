@@ -58,12 +58,6 @@ function saturday(weeks: number, hhmm: string): Date {
 
 const ADMINS = [
   {
-    id: '00000000-0000-4000-8000-00000000a001',
-    schoolsById: 'seed-admin-1',
-    name: 'Ольга',
-    surname: 'Ковалёва',
-  },
-  {
     id: '00000000-0000-4000-8000-00000000a002',
     schoolsById: 'seed-admin-2',
     name: 'Дмитрий',
@@ -74,7 +68,10 @@ const ADMINS = [
 /** teacher: null = the class has no teacher yet. */
 const CLASSES: Record<
   string,
-  { teacher: readonly [string, string] | null; pupils: readonly (readonly [string, string])[] }
+  {
+    teacher: readonly [string, string] | null;
+    pupils: readonly (readonly [string, string])[];
+  }
 > = {
   '8B': {
     teacher: ['Татьяна', 'Лукашевич'],
@@ -817,7 +814,10 @@ const ALL_PUPILS = CLASS_NAMES.flatMap(pupilsOf);
 
 function likesFor(event: SeedEvent): number {
   if (!LIKABLE.has(event.status)) return 0;
-  return event.likes ?? Math.min(ALL_PUPILS.length, votesFor(event) + (event.by % 4) + 1);
+  return (
+    event.likes ??
+    Math.min(ALL_PUPILS.length, votesFor(event) + (event.by % 4) + 1)
+  );
 }
 
 /** A month, as in src/modules/events/event-deadlines.ts. */
@@ -873,7 +873,11 @@ function assertConsistent(event: SeedEvent, createdAt: Date, now: Date): void {
     fail(`${likes} likes but only ${ALL_PUPILS.length} pupils in the school`);
   if (likes > 0 && !LIKABLE.has(event.status))
     fail(`liked in status ${event.status}, before the teacher approved it`);
-  if (!CLASSES[event.cls].teacher && event.status !== ON_MODERATION && event.status !== EXPIRED)
+  if (
+    !CLASSES[event.cls].teacher &&
+    event.status !== ON_MODERATION &&
+    event.status !== EXPIRED
+  )
     fail('moved past moderation in a class that has no teacher');
   if (pending.includes(event.status) && overdue)
     fail('pending, but its deadline (a month after creation) has passed');
@@ -1028,7 +1032,9 @@ async function main(): Promise<void> {
         where: { user: { schoolsById: { startsWith: 'seed-' } } },
       }),
     ]);
-    console.log(`Seeded ${users} users, ${votes} votes, ${likes} likes, events by status:`);
+    console.log(
+      `Seeded ${users} users, ${votes} votes, ${likes} likes, events by status:`,
+    );
     for (const row of events)
       console.log(`  ${row.status.padEnd(20)} ${row._count}`);
   } finally {
