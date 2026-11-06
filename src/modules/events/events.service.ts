@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import {
@@ -61,6 +62,8 @@ const ADMIN_MODERATION: ModerationStage = {
  *    SCHOOL - any pupil.
  * 4. When the votes reach the event's voteThreshold (set by the initiator),
  *    the event moves to ON_ADMIN_MODERATION and voting closes.
+ *    If it is still ON_VOTE when it starts (startsAt), it becomes EXPIRED
+ *    (expireOverdueVotes, run every minute by EventsScheduler).
  * 5. Any admin approves it (FINALIZED) or declines it (DECLINED_BY_ADMIN,
  *    optional reason).
  *
@@ -68,6 +71,8 @@ const ADMIN_MODERATION: ModerationStage = {
  */
 @Injectable()
 export class EventsService {
+  private readonly logger = new Logger(EventsService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   async create(actor: User, dto: CreateEventDto): Promise<EventResponseDto> {
@@ -76,6 +81,10 @@ export class EventsService {
     }
     if (!actor.class) {
       throw new BadRequestException('Pupil has no class assigned');
+    }
+    const startsAt = new Date(dto.startsAt);
+    if (startsAt.getTime() <= Date.now()) {
+      throw new BadRequestException('startsAt must be in the future');
     }
     const teacher = await this.findClassTeacher(actor.class);
 
@@ -86,6 +95,7 @@ export class EventsService {
           description: dto.description,
           scope: dto.scope,
           voteThreshold: dto.voteThreshold,
+          startsAt,
           status: EventStatuses.ON_MODERATION,
           initiatorId: actor.id,
           teacherId: teacher.id,
@@ -137,6 +147,8 @@ export class EventsService {
     const events = await this.prisma.event.findMany({
       where: {
         status: EventStatuses.ON_VOTE,
+        // Not yet started: an overdue event may wait up to a minute for expiration.
+        startsAt: { gt: new Date() },
         OR: [
           { scope: Scopes.SCHOOL },
           { scope: Scopes.GRADE },
@@ -205,7 +217,12 @@ export class EventsService {
     }
     const event = await this.prisma.event.findUnique({
       where: { id },
-      select: { status: true, scope: true, initiator: { select: { class: true } } },
+      select: {
+        status: true,
+        scope: true,
+        startsAt: true,
+        initiator: { select: { class: true } },
+      },
     });
     if (!event) {
       throw new NotFoundException('Event not found');
@@ -213,9 +230,7 @@ export class EventsService {
     if (!this.isInScope(actor.class, event.initiator.class, event.scope)) {
       throw new ForbiddenException(`This ${event.scope} event is not for your class`);
     }
-    if (event.status !== EventStatuses.ON_VOTE) {
-      throw new ConflictException(`Event is not on vote, its status is ${event.status}`);
-    }
+    this.assertVotingOpen(event);
 
     try {
       return await this.prisma.$transaction((tx) => this.castVote(tx, id, actor.id));
@@ -228,7 +243,34 @@ export class EventsService {
     }
   }
 
+  /**
+   * ON_VOTE events that reached their start without enough votes become EXPIRED.
+   * Returns how many were expired. Safe to run concurrently with votes: a vote
+   * holds the row lock, and this update re-checks the status after the lock.
+   */
+  async expireOverdueVotes(now: Date = new Date()): Promise<number> {
+    const { count } = await this.prisma.event.updateMany({
+      where: { status: EventStatuses.ON_VOTE, startsAt: { lte: now } },
+      data: { status: EventStatuses.EXPIRED },
+    });
+    if (count > 0) {
+      this.logger.log(`Expired ${count} event(s) that did not reach the vote threshold in time`);
+    }
+    return count;
+  }
+
   // ---- internals ----
+
+  /** Votes are accepted only while the event is ON_VOTE and has not started yet. */
+  private assertVotingOpen(event: { status: EventStatuses; startsAt: Date }): void {
+    if (event.status !== EventStatuses.ON_VOTE) {
+      throw new ConflictException(`Event is not on vote, its status is ${event.status}`);
+    }
+    // Covers the gap until the scheduler marks the event EXPIRED.
+    if (event.startsAt.getTime() <= Date.now()) {
+      throw new ConflictException('Voting is closed: the event has already started');
+    }
+  }
 
   /**
    * Locks the event row, so votes for one event are applied one at a time:
@@ -240,14 +282,14 @@ export class EventsService {
     eventId: string,
     voterId: string,
   ): Promise<EventVoteResponseDto> {
-    const [locked] = await tx.$queryRaw<{ status: EventStatuses; voteThreshold: number }[]>`
-      SELECT "status", "voteThreshold" FROM "Event" WHERE "id" = ${eventId} FOR UPDATE`;
+    const [locked] = await tx.$queryRaw<
+      { status: EventStatuses; voteThreshold: number; startsAt: Date }[]
+    >`
+      SELECT "status", "voteThreshold", "startsAt" FROM "Event" WHERE "id" = ${eventId} FOR UPDATE`;
     if (!locked) {
       throw new NotFoundException('Event not found');
     }
-    if (locked.status !== EventStatuses.ON_VOTE) {
-      throw new ConflictException(`Event is not on vote, its status is ${locked.status}`);
-    }
+    this.assertVotingOpen(locked);
 
     await tx.eventVote.create({ data: { eventId, voterId } });
     const votesCount = await tx.eventVote.count({ where: { eventId } });

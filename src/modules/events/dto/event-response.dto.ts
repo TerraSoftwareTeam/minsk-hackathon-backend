@@ -24,6 +24,9 @@ export class EventResponseDto {
   @ApiProperty({ example: 15, description: 'Votes needed to move from ON_VOTE to ON_ADMIN_MODERATION' })
   voteThreshold!: number;
 
+  @ApiProperty({ example: '2026-12-01T07:00:00.000Z', description: 'When the event starts (UTC)' })
+  startsAt!: Date;
+
   @ApiProperty({ type: UserResponseDto, description: 'Pupil who created the event' })
   initiator!: UserResponseDto;
 

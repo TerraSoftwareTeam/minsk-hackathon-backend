@@ -2,9 +2,11 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsEnum,
   IsInt,
+  IsISO8601,
   IsNotEmpty,
   IsOptional,
   IsString,
+  Matches,
   Max,
   MaxLength,
   Min,
@@ -39,4 +41,17 @@ export class CreateEventDto {
   @Min(1)
   @Max(10000)
   voteThreshold!: number;
+
+  @ApiProperty({
+    example: '2026-12-01T10:00:00+03:00',
+    description:
+      'When the event starts: ISO 8601 date-time with a timezone (Z or ±hh:mm), in the future. ' +
+      'If the event is still on vote at this moment, it becomes EXPIRED',
+  })
+  @IsISO8601({ strict: true })
+  // Without an explicit offset the moment would depend on the server timezone.
+  @Matches(/T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/, {
+    message: 'startsAt must be a date-time with a timezone, e.g. 2026-12-01T10:00:00+03:00',
+  })
+  startsAt!: string;
 }

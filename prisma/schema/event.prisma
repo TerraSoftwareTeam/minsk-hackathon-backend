@@ -10,6 +10,9 @@ model Event {
   /// Votes needed to move the event from ON_VOTE to ON_ADMIN_MODERATION. Always >= 1.
   voteThreshold Int
 
+  /// When the event takes place. Still ON_VOTE at this moment -> EXPIRED.
+  startsAt DateTime
+
   initiator   User   @relation("EventInitiator", fields: [initiatorId], references: [id])
   initiatorId String
 
@@ -23,4 +26,5 @@ model Event {
 
   @@index([initiatorId])
   @@index([teacherId, status])
+  @@index([status, startsAt])
 }

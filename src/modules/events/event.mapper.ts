@@ -15,6 +15,7 @@ export function toEventResponse(event: EventWithUsers): EventResponseDto {
     status: event.status,
     declineReason: event.declineReason,
     voteThreshold: event.voteThreshold,
+    startsAt: event.startsAt,
     initiator: toUserResponse(event.initiator),
     teacher: toUserResponse(event.teacher),
     createdAt: event.createdAt,
