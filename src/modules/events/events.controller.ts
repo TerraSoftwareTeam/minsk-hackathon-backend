@@ -29,6 +29,7 @@ import { CreateEventDto } from './dto/create-event.dto';
 import { DeclineEventDto } from './dto/decline-event.dto';
 import { EventResponseDto } from './dto/event-response.dto';
 import { EventVoteResponseDto } from './dto/event-vote-response.dto';
+import { VotingEventResponseDto } from './dto/voting-event-response.dto';
 import { EventsService } from './events.service';
 
 @ApiTags('Events')
@@ -54,7 +55,7 @@ export class EventsController {
     return this.eventsService.create(actor, dto);
   }
 
-  // Declared before ':id' so "moderation" / "admin-moderation" are not parsed as an id.
+  // Declared before ':id' so "moderation", "admin-moderation" and "voting" are not parsed as an id.
   @Get('moderation')
   @ApiOperation({
     summary: "Teacher's moderation list",
@@ -64,6 +65,18 @@ export class EventsController {
   @ApiForbiddenResponse({ description: 'Caller is not a teacher' })
   findForModeration(@CurrentUser() actor: User): Promise<EventResponseDto[]> {
     return this.eventsService.findForModeration(actor);
+  }
+
+  @Get('voting')
+  @ApiOperation({
+    summary: "Pupil's voting list",
+    description:
+      "Pupil only. ON_VOTE events whose scope includes the caller (relative to the initiator's class: CLASS - same class, GRADE - same grade, SCHOOL - any pupil), newest first, with the vote count and whether the caller has voted.",
+  })
+  @ApiOkResponse({ type: [VotingEventResponseDto] })
+  @ApiForbiddenResponse({ description: 'Caller is not a pupil' })
+  findForVoting(@CurrentUser() actor: User): Promise<VotingEventResponseDto[]> {
+    return this.eventsService.findForVoting(actor);
   }
 
   @Get('admin-moderation')

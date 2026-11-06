@@ -244,6 +244,77 @@ describe('EventsService', () => {
     });
   });
 
+  describe('findForVoting', () => {
+    const votingEvent = (
+      id: string,
+      scope: Scopes,
+      initiatorClass: string,
+      over: { votes?: { voterId: string }[]; votesCount?: number } = {},
+    ) => ({
+      ...storedEvent({
+        id,
+        scope,
+        status: EventStatuses.ON_VOTE,
+        initiator: { ...otherPupil, class: initiatorClass },
+      }),
+      votes: over.votes ?? [],
+      _count: { votes: over.votesCount ?? 0 },
+    });
+
+    it('queries ON_VOTE events of the pupil scope with their vote state, newest first', async () => {
+      prisma.event.findMany.mockResolvedValue([]);
+
+      await service.findForVoting(pupil);
+
+      expect(prisma.event.findMany).toHaveBeenCalledWith({
+        where: {
+          status: EventStatuses.ON_VOTE,
+          OR: [
+            { scope: Scopes.SCHOOL },
+            { scope: Scopes.GRADE },
+            { scope: Scopes.CLASS, initiator: { class: '10A' } },
+          ],
+        },
+        include: {
+          initiator: true,
+          teacher: true,
+          votes: { where: { voterId: pupil.id }, select: { voterId: true } },
+          _count: { select: { votes: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+    });
+
+    it('keeps only GRADE events of the same grade and maps the vote state', async () => {
+      prisma.event.findMany.mockResolvedValue([
+        votingEvent('school', Scopes.SCHOOL, '5A'),
+        votingEvent('grade-same', Scopes.GRADE, '10Б', {
+          votes: [{ voterId: pupil.id }],
+          votesCount: 7,
+        }),
+        votingEvent('grade-other', Scopes.GRADE, '11A'),
+        votingEvent('grade-prefix', Scopes.GRADE, '1A'),
+        votingEvent('class-same', Scopes.CLASS, '10A'),
+      ]);
+
+      const result = await service.findForVoting(pupil);
+
+      expect(result.map((e) => e.id)).toEqual(['school', 'grade-same', 'class-same']);
+      expect(result[1]).toMatchObject({ votesCount: 7, hasVoted: true });
+      expect(result[0]).toMatchObject({ votesCount: 0, hasVoted: false });
+      expect(result[0]).not.toHaveProperty('votes');
+      expect(result[0]).not.toHaveProperty('_count');
+    });
+
+    it.each([
+      ['teacher', teacher],
+      ['admin', admin],
+    ])('%s has no voting list', async (_name, actor) => {
+      await expect(service.findForVoting(actor)).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.event.findMany).not.toHaveBeenCalled();
+    });
+  });
+
   describe('admin moderation', () => {
     const onAdminModeration = () => storedEvent({ status: EventStatuses.ON_ADMIN_MODERATION });
 

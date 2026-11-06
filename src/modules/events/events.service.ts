@@ -17,9 +17,18 @@ import { CreateEventDto } from './dto/create-event.dto';
 import { DeclineEventDto } from './dto/decline-event.dto';
 import { EventResponseDto } from './dto/event-response.dto';
 import { EventVoteResponseDto } from './dto/event-vote-response.dto';
-import { EventWithUsers, toEventResponse } from './event.mapper';
+import { VotingEventResponseDto } from './dto/voting-event-response.dto';
+import { EventWithUsers, toEventResponse, toVotingEventResponse } from './event.mapper';
 
 const WITH_USERS = { initiator: true, teacher: true } as const;
+
+/** WITH_USERS plus the caller's own vote (0 or 1 rows) and the total vote count. */
+const withVoteState = (voterId: string) =>
+  ({
+    ...WITH_USERS,
+    votes: { where: { voterId }, select: { voterId: true } },
+    _count: { select: { votes: true } },
+  }) as const;
 
 /** A moderation step: which status it decides on and who may decide. */
 type ModerationStage = {
@@ -98,6 +107,33 @@ export class EventsService {
       orderBy: { createdAt: 'asc' },
     });
     return events.map(toEventResponse);
+  }
+
+  /**
+   * Pupil's voting feed: ON_VOTE events whose scope includes the pupil, newest first.
+   * Uses the same isInScope rule as vote(), so every listed event can be voted for.
+   */
+  async findForVoting(actor: User): Promise<VotingEventResponseDto[]> {
+    if (actor.role !== UserRoles.PUPIL) {
+      throw new ForbiddenException('Only a pupil has a voting list');
+    }
+    // CLASS and SCHOOL are filtered by the DB. The grade is parsed from the class
+    // name, which SQL cannot match the same way, so GRADE events are narrowed below.
+    const events = await this.prisma.event.findMany({
+      where: {
+        status: EventStatuses.ON_VOTE,
+        OR: [
+          { scope: Scopes.SCHOOL },
+          { scope: Scopes.GRADE },
+          { scope: Scopes.CLASS, initiator: { class: actor.class } },
+        ],
+      },
+      include: withVoteState(actor.id),
+      orderBy: { createdAt: 'desc' },
+    });
+    return events
+      .filter((event) => this.isInScope(actor.class, event.initiator.class, event.scope))
+      .map(toVotingEventResponse);
   }
 
   /** Admin queue: events that passed the vote and await an admin decision, oldest first. */
