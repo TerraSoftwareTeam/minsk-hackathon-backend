@@ -55,7 +55,7 @@ export class EventsController {
     return this.eventsService.create(actor, dto);
   }
 
-  // Declared before ':id' so "moderation", "admin-moderation" and "voting" are not parsed as an id.
+  // Declared before ':id' so "my", "voting", "moderation" and "admin-moderation" are not parsed as an id.
   @Get('moderation')
   @ApiOperation({
     summary: "Teacher's moderation list",
@@ -65,6 +65,18 @@ export class EventsController {
   @ApiForbiddenResponse({ description: 'Caller is not a teacher' })
   findForModeration(@CurrentUser() actor: User): Promise<EventResponseDto[]> {
     return this.eventsService.findForModeration(actor);
+  }
+
+  @Get('my')
+  @ApiOperation({
+    summary: "Author's own events",
+    description:
+      'Pupil only. All events created by the caller, in any status, newest first, with the vote count.',
+  })
+  @ApiOkResponse({ type: [VotingEventResponseDto] })
+  @ApiForbiddenResponse({ description: 'Caller is not a pupil' })
+  findMine(@CurrentUser() actor: User): Promise<VotingEventResponseDto[]> {
+    return this.eventsService.findMine(actor);
   }
 
   @Get('voting')

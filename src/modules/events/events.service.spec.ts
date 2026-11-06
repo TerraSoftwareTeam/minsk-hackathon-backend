@@ -244,6 +244,49 @@ describe('EventsService', () => {
     });
   });
 
+  describe('findMine', () => {
+    it("returns the author's events in any status, newest first, with vote counts", async () => {
+      prisma.event.findMany.mockResolvedValue([
+        {
+          ...storedEvent({ id: 'e2', status: EventStatuses.DECLINED }),
+          votes: [],
+          _count: { votes: 0 },
+        },
+        {
+          ...storedEvent({ id: 'e1', status: EventStatuses.ON_VOTE }),
+          votes: [{ voterId: pupil.id }],
+          _count: { votes: 4 },
+        },
+      ]);
+
+      const result = await service.findMine(pupil);
+
+      expect(prisma.event.findMany).toHaveBeenCalledWith({
+        where: { initiatorId: pupil.id },
+        include: {
+          initiator: true,
+          teacher: true,
+          votes: { where: { voterId: pupil.id }, select: { voterId: true } },
+          _count: { select: { votes: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(result.map((e) => [e.id, e.status, e.votesCount])).toEqual([
+        ['e2', EventStatuses.DECLINED, 0],
+        ['e1', EventStatuses.ON_VOTE, 4],
+      ]);
+      expect(result[1].hasVoted).toBe(true);
+    });
+
+    it.each([
+      ['teacher', teacher],
+      ['admin', admin],
+    ])('%s has no own events list', async (_name, actor) => {
+      await expect(service.findMine(actor)).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.event.findMany).not.toHaveBeenCalled();
+    });
+  });
+
   describe('findForVoting', () => {
     const votingEvent = (
       id: string,

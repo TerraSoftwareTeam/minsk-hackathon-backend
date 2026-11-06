@@ -109,6 +109,21 @@ export class EventsService {
     return events.map(toEventResponse);
   }
 
+  /** The author's own events in any status, newest first, with their vote count. */
+  async findMine(actor: User): Promise<VotingEventResponseDto[]> {
+    if (actor.role !== UserRoles.PUPIL) {
+      throw new ForbiddenException(
+        'Only a pupil can create events, so only a pupil has own events',
+      );
+    }
+    const events = await this.prisma.event.findMany({
+      where: { initiatorId: actor.id },
+      include: withVoteState(actor.id),
+      orderBy: { createdAt: 'desc' },
+    });
+    return events.map(toVotingEventResponse);
+  }
+
   /**
    * Pupil's voting feed: ON_VOTE events whose scope includes the pupil, newest first.
    * Uses the same isInScope rule as vote(), so every listed event can be voted for.
