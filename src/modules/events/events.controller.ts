@@ -7,6 +7,7 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -30,6 +31,8 @@ import { CreateEventDto } from './dto/create-event.dto';
 import { DeclineEventDto } from './dto/decline-event.dto';
 import { EventResponseDto } from './dto/event-response.dto';
 import { EventVoteResponseDto } from './dto/event-vote-response.dto';
+import { ProbabilityQueryDto } from './dto/probability-query.dto';
+import { ProbabilityResponseDto } from './dto/probability-response.dto';
 import { VotingEventResponseDto } from './dto/voting-event-response.dto';
 import { EventsService } from './events.service';
 
@@ -60,7 +63,26 @@ export class EventsController {
     return this.eventsService.create(actor, dto);
   }
 
-  // Declared before ':id' so "my", "voting", "moderation" and "admin-moderation" are not parsed as an id.
+  // Declared before ':id' so "probability", "my", "voting", "moderation" and "admin-moderation" are not parsed as an id.
+  @Get('probability')
+  @ApiOperation({
+    summary: 'Preview the probability that an event takes place',
+    description:
+      'Any authenticated user. Computed from events of the same category that are FINALIZED (success) or EXPIRED (failure), ' +
+      'even if they have not started yet; declined and pending events are ignored. Only the start time of day (Minsk time) is compared, not the date. ' +
+      'At least 5 such events at the same time, all successful: 0.9; no history: 0.5.',
+  })
+  @ApiOkResponse({ type: ProbabilityResponseDto })
+  @ApiBadRequestResponse({ description: 'Invalid category, or startsAt is not a date-time with a timezone' })
+  async previewProbability(@Query() query: ProbabilityQueryDto): Promise<ProbabilityResponseDto> {
+    return {
+      successProbability: await this.eventsService.previewProbability(
+        query.category,
+        new Date(query.startsAt),
+      ),
+    };
+  }
+
   @Get('moderation')
   @ApiOperation({
     summary: "Teacher's moderation list",

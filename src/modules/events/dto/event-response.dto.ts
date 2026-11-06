@@ -60,6 +60,17 @@ export class EventResponseDto {
   })
   votingClosesAt!: Date;
 
+  @ApiProperty({
+    example: 0.66,
+    minimum: 0,
+    maximum: 1,
+    description:
+      'Computed: probability (0..1) that the event takes place, from other events of the same category with a known outcome (also not yet started ones): ' +
+      'how close their start time of day (Minsk time) is and whether they were FINALIZED or EXPIRED. ' +
+      'Declined and pending events are not counted. 0.9 when at least 5 such events all started at the same time and all took place; 0.5 without history',
+  })
+  successProbability!: number;
+
   @ApiProperty({ type: UserResponseDto, description: 'Pupil who created the event' })
   initiator!: UserResponseDto;
 

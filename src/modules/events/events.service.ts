@@ -7,6 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  EventCategories,
   EventStatuses,
   Prisma,
   Scopes,
@@ -26,6 +27,11 @@ import {
   deadlineCutoff,
   isPastDeadline,
 } from './event-deadlines';
+import {
+  OUTCOME_STATUSES,
+  ProbabilityHistoryEvent,
+  computeSuccessProbability,
+} from './event-probability';
 import { EventWithUsers, toEventResponse, toVotingEventResponse } from './event.mapper';
 
 const WITH_USERS = { initiator: true, teacher: true } as const;
@@ -127,7 +133,16 @@ export class EventsService {
         include: WITH_USERS,
       }),
     );
-    return toEventResponse(event);
+    return this.toResponse(event);
+  }
+
+  /**
+   * Preview for the creation form: the probability that an event of this
+   * category starting at this time takes place (see event-probability.ts).
+   */
+  async previewProbability(category: EventCategories, startsAt: Date): Promise<number> {
+    const history = await this.loadHistory([{ category }]);
+    return computeSuccessProbability(category, startsAt, history);
   }
 
   /** The teacher's queue: events assigned to them that still await a decision. */
@@ -144,7 +159,7 @@ export class EventsService {
       include: WITH_USERS,
       orderBy: { createdAt: 'asc' },
     });
-    return events.map(toEventResponse);
+    return this.toResponses(events, toEventResponse);
   }
 
   /** The author's own events in any status, newest first, with their vote count. */
@@ -159,7 +174,7 @@ export class EventsService {
       include: withVoteState(actor.id),
       orderBy: { createdAt: 'desc' },
     });
-    return events.map(toVotingEventResponse);
+    return this.toResponses(events, toVotingEventResponse);
   }
 
   /**
@@ -186,9 +201,10 @@ export class EventsService {
       include: withVoteState(actor.id),
       orderBy: { createdAt: 'desc' },
     });
-    return events
-      .filter((event) => this.isInScope(actor.class, event.initiator.class, event.scope))
-      .map(toVotingEventResponse);
+    return this.toResponses(
+      events.filter((event) => this.isInScope(actor.class, event.initiator.class, event.scope)),
+      toVotingEventResponse,
+    );
   }
 
   /** Admin queue: events that passed the vote and await an admin decision, oldest first. */
@@ -204,7 +220,7 @@ export class EventsService {
       include: WITH_USERS,
       orderBy: { createdAt: 'asc' },
     });
-    return events.map(toEventResponse);
+    return this.toResponses(events, toEventResponse);
   }
 
   async findOne(actor: User, id: string): Promise<EventResponseDto> {
@@ -212,7 +228,7 @@ export class EventsService {
     if (!this.canRead(actor, event)) {
       throw new ForbiddenException('You cannot access this event');
     }
-    return toEventResponse(event);
+    return this.toResponse(event);
   }
 
   approve(actor: User, id: string): Promise<EventResponseDto> {
@@ -297,6 +313,55 @@ export class EventsService {
   }
 
   // ---- internals ----
+
+  private async toResponse(event: EventWithUsers): Promise<EventResponseDto> {
+    const [response] = await this.toResponses([event], toEventResponse);
+    return response;
+  }
+
+  /** Maps events with their success probability, loading the history once for all of them. */
+  private async toResponses<E extends EventWithUsers, R>(
+    events: E[],
+    map: (event: E, successProbability: number) => R,
+  ): Promise<R[]> {
+    if (events.length === 0) {
+      return [];
+    }
+    const history = await this.loadHistory(events);
+    return events.map((event) =>
+      map(event, computeSuccessProbability(event.category, event.startsAt, history, event.id)),
+    );
+  }
+
+  /**
+   * Events with a known outcome in the categories of `targets`. Declined and pending events have no outcome to learn from.
+   * Loaded on every request, so the probability always reflects the current state.
+   * A pending event past its deadline counts as EXPIRED right away, without
+   * waiting up to a minute for expireOverdue to change its status.
+   */
+  private async loadHistory(
+    targets: { category: EventCategories }[],
+  ): Promise<ProbabilityHistoryEvent[]> {
+    const now = new Date();
+    const events = await this.prisma.event.findMany({
+      where: {
+        category: { in: [...new Set(targets.map((target) => target.category))] },
+        OR: [
+          { status: { in: [...OUTCOME_STATUSES] } },
+          ...Object.entries(EXPIRES_BEFORE_START_MS).map(([status, leadMs]) => ({
+            status: status as PendingStatus,
+            startsAt: { lte: deadlineCutoff(leadMs, now) },
+          })),
+        ],
+      },
+      select: { id: true, category: true, startsAt: true, status: true },
+    });
+    return events.map((event) =>
+      event.status in EXPIRES_BEFORE_START_MS
+        ? { ...event, status: EventStatuses.EXPIRED }
+        : event,
+    );
+  }
 
   /** Votes are accepted only while the event is ON_VOTE and before the voting deadline. */
   private assertVotingOpen(event: { status: EventStatuses; startsAt: Date }): void {
@@ -389,7 +454,7 @@ export class EventsService {
     if (count === 0) {
       throw new ConflictException('Event has already been moderated');
     }
-    return toEventResponse(await this.findEventOrThrow(id));
+    return this.toResponse(await this.findEventOrThrow(id));
   }
 
   /**

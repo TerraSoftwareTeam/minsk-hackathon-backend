@@ -7,7 +7,10 @@ import { VotingEventResponseDto } from './dto/voting-event-response.dto';
 export type EventWithUsers = Event & { initiator: User; teacher: User };
 
 // Explicit field list: never leak extra columns added to the model later.
-export function toEventResponse(event: EventWithUsers): EventResponseDto {
+export function toEventResponse(
+  event: EventWithUsers,
+  successProbability: number,
+): EventResponseDto {
   return {
     id: event.id,
     name: event.name,
@@ -19,6 +22,7 @@ export function toEventResponse(event: EventWithUsers): EventResponseDto {
     voteThreshold: event.voteThreshold,
     startsAt: event.startsAt,
     votingClosesAt: votingClosesAt(event.startsAt),
+    successProbability,
     initiator: toUserResponse(event.initiator),
     teacher: toUserResponse(event.teacher),
     createdAt: event.createdAt,
@@ -32,8 +36,11 @@ export type VotingEvent = EventWithUsers & {
   _count: { votes: number };
 };
 
-export function toVotingEventResponse(event: VotingEvent): VotingEventResponseDto {
-  return Object.assign(toEventResponse(event), {
+export function toVotingEventResponse(
+  event: VotingEvent,
+  successProbability: number,
+): VotingEventResponseDto {
+  return Object.assign(toEventResponse(event, successProbability), {
     votesCount: event._count.votes,
     hasVoted: event.votes.length > 0,
   });

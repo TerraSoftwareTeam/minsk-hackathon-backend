@@ -681,4 +681,84 @@ describe('EventsService', () => {
       });
     });
   });
+
+  describe('success probability', () => {
+    const SAT_NOON = new Date('2026-12-05T12:00:00+03:00');
+    const history = (n: number, status: EventStatuses) =>
+      Array.from({ length: n }, (_, i) => ({
+        category: EventCategories.SPORTS,
+        status,
+        id: `h${i}`,
+        startsAt: new Date(SAT_NOON.getTime() - (i + 1) * 7 * DAY_MS),
+      }));
+
+    it('preview loads earlier FINALIZED/EXPIRED and overdue pending events of the category', async () => {
+      prisma.event.findMany.mockResolvedValue(history(5, EventStatuses.FINALIZED));
+
+      await expect(service.previewProbability(EventCategories.SPORTS, SAT_NOON)).resolves.toBe(0.9);
+      const { where, select } = prisma.event.findMany.mock.calls[0][0];
+      expect(where.category).toEqual({ in: [EventCategories.SPORTS] });
+      expect(where.startsAt).toBeUndefined();
+      expect(where.OR[0]).toEqual({
+        status: { in: [EventStatuses.FINALIZED, EventStatuses.EXPIRED] },
+      });
+      expect(where.OR.slice(1).map((c: { status: EventStatuses }) => c.status)).toEqual([
+        EventStatuses.ON_MODERATION,
+        EventStatuses.ON_VOTE,
+        EventStatuses.ON_ADMIN_MODERATION,
+      ]);
+      expect(select).toEqual({ id: true, category: true, startsAt: true, status: true });
+    });
+
+    it('an overdue pending event counts as a failure before the scheduler expires it', async () => {
+      prisma.event.findMany.mockResolvedValue(history(5, EventStatuses.ON_VOTE));
+
+      await expect(service.previewProbability(EventCategories.SPORTS, SAT_NOON)).resolves.toBe(0.05);
+    });
+
+    it('recomputes on every request: a changed history changes the probability', async () => {
+      prisma.event.findMany.mockResolvedValueOnce(history(5, EventStatuses.FINALIZED));
+      await expect(service.previewProbability(EventCategories.SPORTS, SAT_NOON)).resolves.toBe(0.9);
+
+      prisma.event.findMany.mockResolvedValueOnce(history(5, EventStatuses.EXPIRED));
+      await expect(service.previewProbability(EventCategories.SPORTS, SAT_NOON)).resolves.toBe(0.05);
+    });
+
+    it('event responses carry the probability', async () => {
+      prisma.event.findUnique.mockResolvedValue(storedEvent({ startsAt: SAT_NOON }));
+      prisma.event.findMany.mockResolvedValue(history(1, EventStatuses.FINALIZED));
+
+      const result = await service.findOne(admin, 'event-1');
+      expect(result.successProbability).toBe(0.58);
+    });
+
+    it.each([
+      ['findForModeration', teacher, EventStatuses.ON_MODERATION],
+      ['findMine', pupil, EventStatuses.ON_VOTE],
+      ['findForVoting', pupil, EventStatuses.ON_VOTE],
+      ['findForAdminModeration', admin, EventStatuses.ON_ADMIN_MODERATION],
+    ] as const)('%s returns the probability of every listed event', async (method, actor, status) => {
+      const listed = {
+        ...storedEvent({ status, scope: Scopes.SCHOOL, startsAt: SAT_NOON }),
+        votes: [],
+        _count: { votes: 0 },
+      };
+      prisma.event.findMany
+        .mockResolvedValueOnce([listed, { ...listed, id: 'event-2' }])
+        .mockResolvedValueOnce(history(5, EventStatuses.FINALIZED));
+
+      const result = await service[method](actor);
+      expect(result.map((e) => e.successProbability)).toEqual([0.9, 0.9]);
+    });
+
+    it('lists load the history once for all events', async () => {
+      prisma.event.findMany
+        .mockResolvedValueOnce([storedEvent({ id: 'a' }), storedEvent({ id: 'b' })])
+        .mockResolvedValueOnce([]);
+
+      const result = await service.findForAdminModeration(admin);
+      expect(result.map((e) => e.successProbability)).toEqual([0.5, 0.5]);
+      expect(prisma.event.findMany).toHaveBeenCalledTimes(2);
+    });
+  });
 });
