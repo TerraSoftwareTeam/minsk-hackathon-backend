@@ -27,6 +27,13 @@ export class EventResponseDto {
   @ApiProperty({ example: '2026-12-01T07:00:00.000Z', description: 'When the event starts (UTC)' })
   startsAt!: Date;
 
+  @ApiProperty({
+    example: '2026-11-29T07:00:00.000Z',
+    description:
+      'Computed: 2 days before startsAt. Voting and teacher moderation must finish by then, otherwise the event becomes EXPIRED',
+  })
+  votingClosesAt!: Date;
+
   @ApiProperty({ type: UserResponseDto, description: 'Pupil who created the event' })
   initiator!: UserResponseDto;
 

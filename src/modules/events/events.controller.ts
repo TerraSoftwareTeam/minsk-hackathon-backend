@@ -127,7 +127,7 @@ export class EventsController {
   @ApiOkResponse({ type: EventResponseDto })
   @ApiForbiddenResponse({ description: 'Caller is not the assigned teacher' })
   @ApiNotFoundResponse({ description: 'Event not found' })
-  @ApiConflictResponse({ description: 'Event is not on moderation anymore' })
+  @ApiConflictResponse({ description: 'Event is not on moderation anymore, or voting for it has closed (2 days before the start)' })
   approve(
     @CurrentUser() actor: User,
     @Param('id', ParseUUIDPipe) id: string,
@@ -145,7 +145,7 @@ export class EventsController {
   @ApiOkResponse({ type: EventResponseDto })
   @ApiForbiddenResponse({ description: 'Caller is not the assigned teacher' })
   @ApiNotFoundResponse({ description: 'Event not found' })
-  @ApiConflictResponse({ description: 'Event is not on moderation anymore' })
+  @ApiConflictResponse({ description: 'Event is not on moderation anymore, or voting for it has closed (2 days before the start)' })
   decline(
     @CurrentUser() actor: User,
     @Param('id', ParseUUIDPipe) id: string,
@@ -163,7 +163,7 @@ export class EventsController {
   @ApiOkResponse({ type: EventResponseDto })
   @ApiForbiddenResponse({ description: 'Caller is not an admin' })
   @ApiNotFoundResponse({ description: 'Event not found' })
-  @ApiConflictResponse({ description: 'Event is not on admin moderation' })
+  @ApiConflictResponse({ description: 'Event is not on admin moderation, or has already started' })
   adminApprove(
     @CurrentUser() actor: User,
     @Param('id', ParseUUIDPipe) id: string,
@@ -181,7 +181,7 @@ export class EventsController {
   @ApiOkResponse({ type: EventResponseDto })
   @ApiForbiddenResponse({ description: 'Caller is not an admin' })
   @ApiNotFoundResponse({ description: 'Event not found' })
-  @ApiConflictResponse({ description: 'Event is not on admin moderation' })
+  @ApiConflictResponse({ description: 'Event is not on admin moderation, or has already started' })
   adminDecline(
     @CurrentUser() actor: User,
     @Param('id', ParseUUIDPipe) id: string,
@@ -200,7 +200,7 @@ export class EventsController {
   @ApiOkResponse({ type: EventVoteResponseDto })
   @ApiForbiddenResponse({ description: "Caller is not a pupil, or is outside the event's scope" })
   @ApiNotFoundResponse({ description: 'Event not found' })
-  @ApiConflictResponse({ description: 'Event is not on vote, or the pupil has already voted' })
+  @ApiConflictResponse({ description: 'Event is not on vote, voting has closed (2 days before the start), or the pupil has already voted' })
   vote(
     @CurrentUser() actor: User,
     @Param('id', ParseUUIDPipe) id: string,

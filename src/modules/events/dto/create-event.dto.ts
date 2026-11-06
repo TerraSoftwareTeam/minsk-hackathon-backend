@@ -45,8 +45,9 @@ export class CreateEventDto {
   @ApiProperty({
     example: '2026-12-01T10:00:00+03:00',
     description:
-      'When the event starts: ISO 8601 date-time with a timezone (Z or ±hh:mm), in the future. ' +
-      'If the event is still on vote at this moment, it becomes EXPIRED',
+      'When the event starts: ISO 8601 date-time with a timezone (Z or ±hh:mm), more than 2 days ahead. ' +
+      'Voting closes 2 days before it: an event not approved and voted by then becomes EXPIRED. ' +
+      'The admin may decide on a voted event until it starts',
   })
   @IsISO8601({ strict: true })
   // Without an explicit offset the moment would depend on the server timezone.

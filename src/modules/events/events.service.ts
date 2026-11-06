@@ -19,6 +19,13 @@ import { DeclineEventDto } from './dto/decline-event.dto';
 import { EventResponseDto } from './dto/event-response.dto';
 import { EventVoteResponseDto } from './dto/event-vote-response.dto';
 import { VotingEventResponseDto } from './dto/voting-event-response.dto';
+import {
+  EXPIRES_BEFORE_START_MS,
+  PendingStatus,
+  VOTING_CLOSES_BEFORE_START_MS,
+  deadlineCutoff,
+  isPastDeadline,
+} from './event-deadlines';
 import { EventWithUsers, toEventResponse, toVotingEventResponse } from './event.mapper';
 
 const WITH_USERS = { initiator: true, teacher: true } as const;
@@ -31,23 +38,29 @@ const withVoteState = (voterId: string) =>
     _count: { select: { votes: true } },
   }) as const;
 
-/** A moderation step: which status it decides on and who may decide. */
+/**
+ * A moderation step: which status it decides on and who may decide. Its
+ * deadline is the expiration deadline of that status (EXPIRES_BEFORE_START_MS).
+ */
 type ModerationStage = {
-  from: EventStatuses;
+  from: PendingStatus;
   mayModerate: (actor: User, event: EventWithUsers) => boolean;
   forbiddenMessage: string;
+  lateMessage: string;
 };
 
 const TEACHER_MODERATION: ModerationStage = {
   from: EventStatuses.ON_MODERATION,
   mayModerate: (actor, event) => actor.id === event.teacherId,
   forbiddenMessage: 'Only the assigned teacher can moderate this event',
+  lateMessage: 'Too late to moderate: voting for this event closed 2 days before its start',
 };
 
 const ADMIN_MODERATION: ModerationStage = {
   from: EventStatuses.ON_ADMIN_MODERATION,
   mayModerate: (actor) => actor.role === UserRoles.ADMIN,
   forbiddenMessage: 'Only an admin can moderate this event',
+  lateMessage: 'Too late to moderate: the event has already started',
 };
 
 /**
@@ -62,10 +75,17 @@ const ADMIN_MODERATION: ModerationStage = {
  *    SCHOOL - any pupil.
  * 4. When the votes reach the event's voteThreshold (set by the initiator),
  *    the event moves to ON_ADMIN_MODERATION and voting closes.
- *    If it is still ON_VOTE when it starts (startsAt), it becomes EXPIRED
- *    (expireOverdueVotes, run every minute by EventsScheduler).
  * 5. Any admin approves it (FINALIZED) or declines it (DECLINED_BY_ADMIN,
  *    optional reason).
+ *
+ * Deadlines (see event-deadlines.ts). The pupil sets only startsAt; voting
+ * closes 2 days before it (votingClosesAt).
+ * - ON_MODERATION and ON_VOTE expire at the voting deadline: the event did not
+ *   get approved and collect its votes in time.
+ * - ON_ADMIN_MODERATION expires at startsAt: the admin uses the time left.
+ * Expired events become EXPIRED (expireOverdue, run every minute by
+ * EventsScheduler). Past its deadline no vote or decision is accepted, even
+ * before the scheduler runs, and the queues and the voting feed hide the event.
  *
  * Who may read an event: its initiator, its assigned teacher, any admin.
  */
@@ -83,8 +103,11 @@ export class EventsService {
       throw new BadRequestException('Pupil has no class assigned');
     }
     const startsAt = new Date(dto.startsAt);
-    if (startsAt.getTime() <= Date.now()) {
-      throw new BadRequestException('startsAt must be in the future');
+    // Otherwise the event would expire right away, before anyone could vote.
+    if (isPastDeadline(startsAt, VOTING_CLOSES_BEFORE_START_MS)) {
+      throw new BadRequestException(
+        'startsAt must be more than 2 days ahead: voting closes 2 days before the event',
+      );
     }
     const teacher = await this.findClassTeacher(actor.class);
 
@@ -112,7 +135,11 @@ export class EventsService {
       throw new ForbiddenException('Only a teacher has a moderation list');
     }
     const events = await this.prisma.event.findMany({
-      where: { teacherId: actor.id, status: EventStatuses.ON_MODERATION },
+      where: {
+        teacherId: actor.id,
+        status: EventStatuses.ON_MODERATION,
+        startsAt: { gt: deadlineCutoff(EXPIRES_BEFORE_START_MS.ON_MODERATION) },
+      },
       include: WITH_USERS,
       orderBy: { createdAt: 'asc' },
     });
@@ -147,8 +174,8 @@ export class EventsService {
     const events = await this.prisma.event.findMany({
       where: {
         status: EventStatuses.ON_VOTE,
-        // Not yet started: an overdue event may wait up to a minute for expiration.
-        startsAt: { gt: new Date() },
+        // Voting still open: an overdue event may wait up to a minute for expiration.
+        startsAt: { gt: deadlineCutoff(EXPIRES_BEFORE_START_MS.ON_VOTE) },
         OR: [
           { scope: Scopes.SCHOOL },
           { scope: Scopes.GRADE },
@@ -169,7 +196,10 @@ export class EventsService {
       throw new ForbiddenException('Only an admin has the admin moderation list');
     }
     const events = await this.prisma.event.findMany({
-      where: { status: EventStatuses.ON_ADMIN_MODERATION },
+      where: {
+        status: EventStatuses.ON_ADMIN_MODERATION,
+        startsAt: { gt: deadlineCutoff(EXPIRES_BEFORE_START_MS.ON_ADMIN_MODERATION) },
+      },
       include: WITH_USERS,
       orderBy: { createdAt: 'asc' },
     });
@@ -244,31 +274,36 @@ export class EventsService {
   }
 
   /**
-   * ON_VOTE events that reached their start without enough votes become EXPIRED.
-   * Returns how many were expired. Safe to run concurrently with votes: a vote
-   * holds the row lock, and this update re-checks the status after the lock.
+   * Pending events past the deadline of their status become EXPIRED.
+   * Returns how many were expired. Safe to run concurrently with votes and
+   * decisions: they hold the row lock or update conditionally on the status,
+   * and this update re-checks the status after the lock.
    */
-  async expireOverdueVotes(now: Date = new Date()): Promise<number> {
+  async expireOverdue(now: Date = new Date()): Promise<number> {
     const { count } = await this.prisma.event.updateMany({
-      where: { status: EventStatuses.ON_VOTE, startsAt: { lte: now } },
+      where: {
+        OR: Object.entries(EXPIRES_BEFORE_START_MS).map(([status, leadMs]) => ({
+          status: status as PendingStatus,
+          startsAt: { lte: deadlineCutoff(leadMs, now) },
+        })),
+      },
       data: { status: EventStatuses.EXPIRED },
     });
     if (count > 0) {
-      this.logger.log(`Expired ${count} event(s) that did not reach the vote threshold in time`);
+      this.logger.log(`Expired ${count} event(s) that were not decided before their deadline`);
     }
     return count;
   }
 
   // ---- internals ----
 
-  /** Votes are accepted only while the event is ON_VOTE and has not started yet. */
+  /** Votes are accepted only while the event is ON_VOTE and before the voting deadline. */
   private assertVotingOpen(event: { status: EventStatuses; startsAt: Date }): void {
     if (event.status !== EventStatuses.ON_VOTE) {
       throw new ConflictException(`Event is not on vote, its status is ${event.status}`);
     }
-    // Covers the gap until the scheduler marks the event EXPIRED.
-    if (event.startsAt.getTime() <= Date.now()) {
-      throw new ConflictException('Voting is closed: the event has already started');
+    if (isPastDeadline(event.startsAt, EXPIRES_BEFORE_START_MS.ON_VOTE)) {
+      throw new ConflictException('Voting is closed: it closes 2 days before the event starts');
     }
   }
 
@@ -338,11 +373,16 @@ export class EventsService {
     if (event.status !== stage.from) {
       throw new ConflictException(`Event is already ${event.status}`);
     }
+    const leadMs = EXPIRES_BEFORE_START_MS[stage.from];
+    if (isPastDeadline(event.startsAt, leadMs)) {
+      throw new ConflictException(stage.lateMessage);
+    }
 
     // The status condition makes the transition atomic: if two requests race,
-    // only the first one changes the row, the second gets 409.
+    // only the first one changes the row, the second gets 409. The startsAt
+    // condition does the same against the expiration job.
     const { count } = await this.prisma.event.updateMany({
-      where: { id, status: stage.from },
+      where: { id, status: stage.from, startsAt: { gt: deadlineCutoff(leadMs) } },
       data,
     });
     if (count === 0) {

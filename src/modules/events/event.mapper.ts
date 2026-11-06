@@ -1,6 +1,7 @@
 import { Event, User } from '../../../prisma/generated/prisma/client';
 import { toUserResponse } from '../auth/user.mapper';
 import { EventResponseDto } from './dto/event-response.dto';
+import { votingClosesAt } from './event-deadlines';
 import { VotingEventResponseDto } from './dto/voting-event-response.dto';
 
 export type EventWithUsers = Event & { initiator: User; teacher: User };
@@ -16,6 +17,7 @@ export function toEventResponse(event: EventWithUsers): EventResponseDto {
     declineReason: event.declineReason,
     voteThreshold: event.voteThreshold,
     startsAt: event.startsAt,
+    votingClosesAt: votingClosesAt(event.startsAt),
     initiator: toUserResponse(event.initiator),
     teacher: toUserResponse(event.teacher),
     createdAt: event.createdAt,
