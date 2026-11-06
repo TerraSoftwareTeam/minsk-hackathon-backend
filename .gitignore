@@ -63,4 +63,7 @@ prisma/generated/prisma
 .agents
 .claude
 dist
-kola-34581-firebase-adminsdk-fbsvc-995d95db2e.json
+
+# Firebase service account key
+*firebase-adminsdk*.json
+firebase-service-account.json

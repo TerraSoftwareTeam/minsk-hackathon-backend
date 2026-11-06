@@ -1,0 +1,19 @@
+/// An FCM registration token of one app install. A user has one per device (phone, tablet...).
+model DeviceToken {
+  id    String @id @default(uuid())
+  /// FCM registration token. Unique: a device belongs to whoever logged in on it last.
+  token String @unique
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  platform DevicePlatforms?
+  /// Client-side install id. A new token for the same user and deviceId replaces the old one.
+  deviceId String?
+
+  createdAt DateTime @default(now())
+  /// Last time the app registered this token.
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, deviceId])
+}

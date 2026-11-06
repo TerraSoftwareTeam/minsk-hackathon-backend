@@ -11,6 +11,10 @@ services:
       DATABASE_HOST: db
       DATABASE_PORT: "5432"
       REDIS_URL: "redis://redis:6379"
+      FIREBASE_SERVICE_ACCOUNT_PATH: /run/secrets/firebase-service-account.json
+    volumes:
+      # The key stays on the host, outside the image. Host path comes from .env.
+      - "${FIREBASE_SERVICE_ACCOUNT_PATH:?set FIREBASE_SERVICE_ACCOUNT_PATH in .env}:/run/secrets/firebase-service-account.json:ro"
     depends_on:
       db:
         condition: service_healthy

@@ -14,6 +14,7 @@ import {
 } from '../../../prisma/generated/prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ImagesService } from '../images/images.service';
+import { EventModerationNotifier } from './event-moderation.notifier';
 import { EventWithUsers } from './event.mapper';
 import { EventsService } from './events.service';
 
@@ -75,6 +76,7 @@ describe('EventsService', () => {
     $transaction: jest.Mock;
   };
   let images: { uploadImage: jest.Mock; deleteImage: jest.Mock };
+  let notifier: { awaitsTeacher: jest.Mock; awaitsAdmin: jest.Mock };
   // Client used inside prisma.$transaction(fn).
   let tx: {
     $queryRaw: jest.Mock;
@@ -111,7 +113,12 @@ describe('EventsService', () => {
       uploadImage: jest.fn().mockResolvedValue({ id: 'img-new', url: 'https://cdn/new.jpg' }),
       deleteImage: jest.fn().mockResolvedValue(undefined),
     };
-    service = new EventsService(prisma as unknown as PrismaService, images as unknown as ImagesService);
+    notifier = { awaitsTeacher: jest.fn(), awaitsAdmin: jest.fn() };
+    service = new EventsService(
+      prisma as unknown as PrismaService,
+      images as unknown as ImagesService,
+      notifier as unknown as EventModerationNotifier,
+    );
   });
 
   describe('create', () => {
@@ -135,6 +142,7 @@ describe('EventsService', () => {
       });
       expect(result.initiator.id).toBe(pupil.id);
       expect(result.teacher.id).toBe(teacher.id);
+      expect(notifier.awaitsTeacher).toHaveBeenCalledWith(storedEvent());
     });
 
     it.each([
@@ -585,6 +593,7 @@ describe('EventsService', () => {
         voteThreshold: 10,
         status: EventStatuses.ON_VOTE,
       });
+      expect(notifier.awaitsAdmin).not.toHaveBeenCalled();
     });
 
     it('the vote that reaches the threshold moves the event to ON_ADMIN_MODERATION', async () => {
@@ -597,6 +606,7 @@ describe('EventsService', () => {
         data: { status: EventStatuses.ON_ADMIN_MODERATION },
       });
       expect(result.status).toBe(EventStatuses.ON_ADMIN_MODERATION);
+      expect(notifier.awaitsAdmin).toHaveBeenCalledWith('event-1');
     });
 
     it('threshold 1: the first vote already moves the event', async () => {

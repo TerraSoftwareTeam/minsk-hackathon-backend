@@ -33,6 +33,7 @@ import {
   ProbabilityHistoryEvent,
   computeSuccessProbability,
 } from './event-probability';
+import { EventModerationNotifier } from './event-moderation.notifier';
 import { EventWithUsers, toEventResponse, toVotingEventResponse } from './event.mapper';
 
 const WITH_USERS = { initiator: true, teacher: true, image: { select: { url: true } } } as const;
@@ -96,6 +97,10 @@ const ADMIN_MODERATION: ModerationStage = {
  *
  * Who may read an event: its initiator, its assigned teacher, any admin.
  *
+ * Push notifications (EventModerationNotifier): the teacher gets one when an
+ * event is assigned to them (1), every admin when an event reaches
+ * ON_ADMIN_MODERATION (4). Sent after the change is committed.
+ *
  * Image (optional, at most one per event): the author sets, replaces or
  * removes it until the event is decided, i.e. while it is pending and not past
  * its deadline. An admin may remove it in any status (e.g. an unsuitable picture).
@@ -107,6 +112,7 @@ export class EventsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly images: ImagesService,
+    private readonly notifier: EventModerationNotifier,
   ) {}
 
   async create(actor: User, dto: CreateEventDto): Promise<EventResponseDto> {
@@ -141,6 +147,7 @@ export class EventsService {
         include: WITH_USERS,
       }),
     );
+    this.notifier.awaitsTeacher(event);
     return this.toResponse(event);
   }
 
@@ -287,8 +294,9 @@ export class EventsService {
     }
     this.assertVotingOpen(event);
 
+    let result: EventVoteResponseDto;
     try {
-      return await this.prisma.$transaction((tx) => this.castVote(tx, id, actor.id));
+      result = await this.prisma.$transaction((tx) => this.castVote(tx, id, actor.id));
     } catch (error) {
       // The (eventId, voterId) primary key rejects a second vote, also under a race.
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
@@ -296,6 +304,11 @@ export class EventsService {
       }
       throw error;
     }
+    // castVote returns ON_ADMIN_MODERATION only for the vote that made the transition, so admins are notified once.
+    if (result.status === EventStatuses.ON_ADMIN_MODERATION) {
+      this.notifier.awaitsAdmin(id);
+    }
+    return result;
   }
 
   /** Sets or replaces the event image. The previous image is deleted. */

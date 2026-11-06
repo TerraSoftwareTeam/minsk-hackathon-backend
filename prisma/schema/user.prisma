@@ -7,8 +7,9 @@ model User {
   class       String?
   role        UserRoles @default(PUPIL)
 
-  initiatedEvents Event[]     @relation("EventInitiator")
-  teacherEvents   Event[]     @relation("EventTeacher")
+  initiatedEvents Event[]       @relation("EventInitiator")
+  teacherEvents   Event[]       @relation("EventTeacher")
   eventVotes      EventVote[]
-  uploadedImages  Image[]     @relation("UploadedImages")
+  uploadedImages  Image[]       @relation("UploadedImages")
+  deviceTokens    DeviceToken[]
 }

@@ -45,6 +45,18 @@ API (NestJS, контейнер)
 
 `.env` в корне проекта, шаблон — `.env.example`. В нём задаются порт API, доступ к Postgres, секрет JWT и Redis.
 
+### Push-уведомления (Firebase Cloud Messaging)
+
+- `FIREBASE_SERVICE_ACCOUNT_PATH` — путь к JSON-ключу сервисного аккаунта Firebase. Ключ не коммитится
+  и не попадает в образ: docker-compose монтирует его в контейнер read-only. Без переменной пуши выключены.
+- Мобилка регистрирует токен: `POST /api/v1/device-token` `{ token, platform?, deviceId? }` — при логине и
+  старте приложения; `DELETE /api/v1/device-token` `{ token }` — при выходе. У пользователя может быть
+  несколько устройств.
+- Кому приходят пуши: учителю — когда ему назначено новое мероприятие на модерацию; всем админам — когда
+  мероприятие набрало голоса. В `data`: `type` (`EVENT_TEACHER_MODERATION` / `EVENT_ADMIN_MODERATION`),
+  `eventId`, `status`.
+- Мёртвые токены (`UNREGISTERED`, `INVALID_ARGUMENT`) удаляются автоматически после отправки.
+
 ## Запуск
 
 ```bash
