@@ -19,9 +19,6 @@ export class UserResponseDto {
   @ApiProperty({ example: 'Ivanov', description: 'Last name' })
   surname!: string;
 
-  @ApiProperty({ example: 'Petrovich', description: "Father's name" })
-  fathersName!: string;
-
   @ApiProperty({
     example: '10A',
     nullable: true,

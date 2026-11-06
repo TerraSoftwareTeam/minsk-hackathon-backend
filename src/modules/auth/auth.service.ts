@@ -35,7 +35,6 @@ export class AuthService {
           schoolsById: dto.schoolsById,
           name: dto.name,
           surname: dto.surname,
-          fathersName: dto.fathersName,
           role: dto.role,
           class: dto.class,
         },

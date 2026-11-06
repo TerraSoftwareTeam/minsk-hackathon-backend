@@ -23,7 +23,6 @@ const user = (over: Partial<User>): User => ({
   schoolsById: null,
   name: 'N',
   surname: 'S',
-  fathersName: 'F',
   class: null,
   role: UserRoles.PUPIL,
   ...over,

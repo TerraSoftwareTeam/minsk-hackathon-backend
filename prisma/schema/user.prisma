@@ -3,7 +3,6 @@ model User {
   schoolsById String?   @unique
   name        String
   surname     String
-  fathersName String
   class       String?
   role        UserRoles @default(PUPIL)
 

@@ -13,7 +13,6 @@ const admin: User = {
   schoolsById: null,
   name: 'Anna',
   surname: 'Admin',
-  fathersName: 'Sergeevna',
   class: null,
   role: UserRoles.ADMIN,
 };
@@ -23,7 +22,6 @@ const teacher: User = {
   schoolsById: 'sch-t1',
   name: 'Maria',
   surname: 'Sidorova',
-  fathersName: 'Ivanovna',
   class: '10A',
   role: UserRoles.TEACHER,
 };
@@ -33,7 +31,6 @@ const pupil: User = {
   schoolsById: 'sch-p1',
   name: 'Ivan',
   surname: 'Ivanov',
-  fathersName: 'Petrovich',
   class: '10A',
   role: UserRoles.PUPIL,
 };
@@ -139,7 +136,6 @@ describe('UsersService', () => {
       schoolsById: 'sch-new',
       name: 'Petr',
       surname: 'Petrov',
-      fathersName: 'Ivanovich',
       role: UserRoles.PUPIL,
     };
 
@@ -170,7 +166,7 @@ describe('UsersService', () => {
     });
 
     it('admin creates an admin without school fields', async () => {
-      await service.create(admin, { name: 'B', surname: 'C', fathersName: 'D', role: UserRoles.ADMIN });
+      await service.create(admin, { name: 'B', surname: 'C', role: UserRoles.ADMIN });
       expect(prisma.user.create.mock.calls[0][0].data).toMatchObject({
         role: UserRoles.ADMIN,
         schoolsById: null,

@@ -15,7 +15,6 @@ const storedUser = {
   schoolsById: 'school-user-1',
   name: 'Ivan',
   surname: 'Ivanov',
-  fathersName: 'Petrovich',
   class: '10A',
   role: UserRoles.PUPIL,
 };
@@ -26,7 +25,6 @@ const dto: RegisterDto = {
   schoolsById: 'school-user-1',
   name: 'Ivan',
   surname: 'Ivanov',
-  fathersName: 'Petrovich',
   role: UserRoles.PUPIL,
   class: '10A',
 };
@@ -89,7 +87,6 @@ describe('AuthService.register', () => {
       schoolsById: 'school-user-2',
       name: 'Maria',
       surname: 'Sidorova',
-      fathersName: 'Ivanovna',
       role: UserRoles.TEACHER,
       class: '10A',
     };

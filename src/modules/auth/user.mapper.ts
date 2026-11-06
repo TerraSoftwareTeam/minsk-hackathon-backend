@@ -8,7 +8,6 @@ export function toUserResponse(user: User): UserResponseDto {
     schoolsById: user.schoolsById,
     name: user.name,
     surname: user.surname,
-    fathersName: user.fathersName,
     class: user.class,
     role: user.role,
   };

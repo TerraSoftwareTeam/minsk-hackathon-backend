@@ -35,11 +35,6 @@ export class RegisterDto {
   @IsNotEmpty()
   surname!: string;
 
-  @ApiProperty({ example: 'Petrovich', description: "Father's name" })
-  @IsString()
-  @IsNotEmpty()
-  fathersName!: string;
-
   @ApiProperty({
     enum: SELF_REGISTRABLE_ROLES,
     example: UserRoles.PUPIL,

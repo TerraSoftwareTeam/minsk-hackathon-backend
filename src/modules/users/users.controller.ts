@@ -60,13 +60,12 @@ export class UsersController {
           schoolsById: 'school-user-789',
           name: 'Petr',
           surname: 'Petrov',
-          fathersName: 'Ivanovich',
           role: UserRoles.PUPIL,
         },
       },
       adminCreatesAdmin: {
         summary: 'Admin creates an admin',
-        value: { name: 'Anna', surname: 'Admin', fathersName: 'Sergeevna', role: UserRoles.ADMIN },
+        value: { name: 'Anna', surname: 'Admin', role: UserRoles.ADMIN },
       },
     },
   })
@@ -101,7 +100,7 @@ export class UsersController {
   @Patch(':id')
   @ApiOperation({
     summary: 'Update a user',
-    description: `${ROLE_HINT} Only an admin can change role, class, schoolsById; others change name, surname, fathersName.`,
+    description: `${ROLE_HINT} Only an admin can change role, class, schoolsById; others change name and surname.`,
   })
   @ApiBody({ type: UpdateUserDto })
   @ApiOkResponse({ type: UserResponseDto })

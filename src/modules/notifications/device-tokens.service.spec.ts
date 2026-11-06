@@ -7,7 +7,6 @@ const teacher: User = {
   schoolsById: 't1',
   name: 'N',
   surname: 'S',
-  fathersName: 'F',
   class: '10A',
   role: UserRoles.TEACHER,
 };

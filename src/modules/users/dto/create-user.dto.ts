@@ -30,11 +30,6 @@ export class CreateUserDto {
   @IsNotEmpty()
   surname!: string;
 
-  @ApiProperty({ example: 'Petrovich', description: "Father's name" })
-  @IsString()
-  @IsNotEmpty()
-  fathersName!: string;
-
   @ApiProperty({
     enum: UserRoles,
     example: UserRoles.PUPIL,

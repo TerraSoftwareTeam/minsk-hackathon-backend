@@ -19,12 +19,12 @@ import { UpdateUserDto } from './dto/update-user.dto';
  *            Can create pupils in their class, edit their personal fields, delete them.
  * - PUPIL:   self only.
  *
- * Non-admins may change only personal fields (name, surname, fathersName).
+ * Non-admins may change only personal fields (name, surname).
  * role, class and schoolsById are admin-only: otherwise a pupil could
  * leave the teacher's class, or a teacher could move into another class.
  */
 
-const PERSONAL_FIELDS = ['name', 'surname', 'fathersName'] as const;
+const PERSONAL_FIELDS = ['name', 'surname'] as const;
 const ADMIN_ONLY_FIELDS = ['role', 'class', 'schoolsById'] as const;
 
 type SchoolFields = {
@@ -48,7 +48,6 @@ export class UsersService {
         data: {
           name: input.name,
           surname: input.surname,
-          fathersName: input.fathersName,
           role: input.role,
           ...schoolFields,
         },
@@ -137,7 +136,6 @@ export class UsersService {
       schoolsById: dto.schoolsById,
       name: dto.name,
       surname: dto.surname,
-      fathersName: dto.fathersName,
       role: UserRoles.PUPIL,
       class: actor.class,
     };
@@ -157,7 +155,6 @@ export class UsersService {
     return {
       name: dto.name,
       surname: dto.surname,
-      fathersName: dto.fathersName,
       role: dto.role,
       ...schoolFields,
     };
