@@ -11,7 +11,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
-import { Scopes } from '../../../../prisma/generated/prisma/client';
+import { EventCategories, Scopes } from '../../../../prisma/generated/prisma/client';
 
 export class CreateEventDto {
   @ApiProperty({ example: 'Class trip to the museum', description: 'Event name (unique)' })
@@ -30,6 +30,19 @@ export class CreateEventDto {
   @IsOptional()
   @IsEnum(Scopes)
   scope?: Scopes;
+
+  @ApiProperty({
+    enum: EventCategories,
+    example: EventCategories.SPORTS,
+    description:
+      'Kind of event: SPORTS - competitions, tournaments; INTELLECTUAL - olympiads, quizzes, debates; ' +
+      'CULTURAL - theatre, museum, cinema; CREATIVE - concerts, contests, exhibitions; ' +
+      'EDUCATIONAL - lectures, workshops; VOLUNTEER - charity, social help; ' +
+      'ENVIRONMENTAL - clean-ups, tree planting; TOURISM - hikes, excursions, trips; ' +
+      'ENTERTAINMENT - celebrations, discos, quests; OTHER - anything else',
+  })
+  @IsEnum(EventCategories)
+  category!: EventCategories;
 
   @ApiProperty({
     example: 15,

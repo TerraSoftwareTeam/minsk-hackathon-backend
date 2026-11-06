@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  EventCategories,
   EventStatuses,
   Prisma,
   Scopes,
@@ -43,6 +44,7 @@ const storedEvent = (over: Partial<EventWithUsers> = {}): EventWithUsers => ({
   name: 'Trip',
   description: null,
   scope: Scopes.CLASS,
+  category: EventCategories.SPORTS,
   status: EventStatuses.ON_MODERATION,
   declineReason: null,
   voteThreshold: 10,
@@ -106,7 +108,7 @@ describe('EventsService', () => {
 
   describe('create', () => {
     it('pupil creates an ON_MODERATION event assigned to the teacher of their class', async () => {
-      const result = await service.create(pupil, { name: 'Trip', scope: Scopes.GRADE, voteThreshold: 10, startsAt: FUTURE.toISOString() });
+      const result = await service.create(pupil, { name: 'Trip', scope: Scopes.GRADE, voteThreshold: 10, startsAt: FUTURE.toISOString(), category: EventCategories.SPORTS });
 
       expect(prisma.user.findFirst).toHaveBeenCalledWith({
         where: { role: UserRoles.TEACHER, class: '10A' },
@@ -116,6 +118,7 @@ describe('EventsService', () => {
         name: 'Trip',
         description: undefined,
         scope: Scopes.GRADE,
+        category: EventCategories.SPORTS,
         voteThreshold: 10,
         startsAt: FUTURE,
         status: EventStatuses.ON_MODERATION,
@@ -130,7 +133,7 @@ describe('EventsService', () => {
       ['teacher', teacher],
       ['admin', admin],
     ])('%s cannot create an event', async (_name, actor) => {
-      await expect(service.create(actor, { name: 'Trip', voteThreshold: 10, startsAt: FUTURE.toISOString() })).rejects.toBeInstanceOf(
+      await expect(service.create(actor, { name: 'Trip', voteThreshold: 10, startsAt: FUTURE.toISOString(), category: EventCategories.SPORTS })).rejects.toBeInstanceOf(
         ForbiddenException,
       );
       expect(prisma.event.create).not.toHaveBeenCalled();
@@ -138,7 +141,7 @@ describe('EventsService', () => {
 
     it('BadRequest when the class has no teacher', async () => {
       prisma.user.findFirst.mockResolvedValue(null);
-      await expect(service.create(pupil, { name: 'Trip', voteThreshold: 10, startsAt: FUTURE.toISOString() })).rejects.toBeInstanceOf(
+      await expect(service.create(pupil, { name: 'Trip', voteThreshold: 10, startsAt: FUTURE.toISOString(), category: EventCategories.SPORTS })).rejects.toBeInstanceOf(
         BadRequestException,
       );
       expect(prisma.event.create).not.toHaveBeenCalled();
@@ -146,7 +149,7 @@ describe('EventsService', () => {
 
     it('BadRequest when the pupil has no class', async () => {
       await expect(
-        service.create({ ...pupil, class: null }, { name: 'Trip', voteThreshold: 10, startsAt: FUTURE.toISOString() }),
+        service.create({ ...pupil, class: null }, { name: 'Trip', voteThreshold: 10, startsAt: FUTURE.toISOString(), category: EventCategories.SPORTS }),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
@@ -155,7 +158,7 @@ describe('EventsService', () => {
       ['less than 2 days ahead', IN_TWO_DAYS_WINDOW],
     ])('BadRequest, nothing stored, when startsAt is %s', async (_name, startsAt) => {
       await expect(
-        service.create(pupil, { name: 'Trip', voteThreshold: 10, startsAt: startsAt.toISOString() }),
+        service.create(pupil, { name: 'Trip', voteThreshold: 10, startsAt: startsAt.toISOString(), category: EventCategories.SPORTS }),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(prisma.event.create).not.toHaveBeenCalled();
     });
@@ -164,7 +167,7 @@ describe('EventsService', () => {
       const result = await service.create(pupil, {
         name: 'Trip',
         voteThreshold: 10,
-        startsAt: FUTURE.toISOString(),
+        startsAt: FUTURE.toISOString(), category: EventCategories.SPORTS,
       });
       expect(result.votingClosesAt.getTime()).toBe(FUTURE.getTime() - 2 * DAY_MS);
     });
@@ -176,7 +179,7 @@ describe('EventsService', () => {
           clientVersion: 'test',
         }),
       );
-      await expect(service.create(pupil, { name: 'Trip', voteThreshold: 10, startsAt: FUTURE.toISOString() })).rejects.toBeInstanceOf(
+      await expect(service.create(pupil, { name: 'Trip', voteThreshold: 10, startsAt: FUTURE.toISOString(), category: EventCategories.SPORTS })).rejects.toBeInstanceOf(
         ConflictException,
       );
     });

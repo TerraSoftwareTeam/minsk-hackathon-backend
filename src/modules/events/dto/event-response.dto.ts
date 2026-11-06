@@ -1,5 +1,9 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { EventStatuses, Scopes } from '../../../../prisma/generated/prisma/client';
+import {
+  EventCategories,
+  EventStatuses,
+  Scopes,
+} from '../../../../prisma/generated/prisma/client';
 import { UserResponseDto } from '../../auth/dto/user-response.dto';
 
 export class EventResponseDto {
@@ -14,6 +18,9 @@ export class EventResponseDto {
 
   @ApiProperty({ enum: Scopes, example: Scopes.CLASS })
   scope!: Scopes;
+
+  @ApiProperty({ enum: EventCategories, example: EventCategories.SPORTS })
+  category!: EventCategories;
 
   @ApiProperty({ enum: EventStatuses, example: EventStatuses.ON_MODERATION })
   status!: EventStatuses;

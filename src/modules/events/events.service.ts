@@ -117,6 +117,7 @@ export class EventsService {
           name: dto.name,
           description: dto.description,
           scope: dto.scope,
+          category: dto.category,
           voteThreshold: dto.voteThreshold,
           startsAt,
           status: EventStatuses.ON_MODERATION,

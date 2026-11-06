@@ -1,16 +1,17 @@
 model Event {
-  id          String        @id @default(uuid())
-  name        String        @unique
+  id          String          @id @default(uuid())
+  name        String          @unique
   description String?
-  scope       Scopes        @default(CLASS)
-  status      EventStatuses @default(ON_MODERATION)
+  scope       Scopes          @default(CLASS)
+  category    EventCategories
+  status      EventStatuses   @default(ON_MODERATION)
 
   declineReason String?
 
   /// Votes needed to move the event from ON_VOTE to ON_ADMIN_MODERATION. Always >= 1.
   voteThreshold Int
 
-  /// When the event takes place. Still ON_VOTE at this moment -> EXPIRED.
+  /// When the event takes place. Pending deadlines are derived from it (event-deadlines.ts).
   startsAt DateTime
 
   initiator   User   @relation("EventInitiator", fields: [initiatorId], references: [id])
