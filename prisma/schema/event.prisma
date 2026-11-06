@@ -7,6 +7,9 @@ model Event {
 
   declineReason String?
 
+  /// Votes needed to move the event from ON_VOTE to ON_ADMIN_MODERATION. Always >= 1.
+  voteThreshold Int
+
   initiator   User   @relation("EventInitiator", fields: [initiatorId], references: [id])
   initiatorId String
 
