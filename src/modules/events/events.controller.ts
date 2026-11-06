@@ -1,25 +1,33 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
   Param,
   ParseUUIDPipe,
   Post,
+  Put,
   Query,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
+  ApiBadGatewayResponse,
   ApiBadRequestResponse,
   ApiBearerAuth,
   ApiBody,
   ApiConflictResponse,
+  ApiConsumes,
   ApiCreatedResponse,
   ApiForbiddenResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
+  ApiPayloadTooLargeResponse,
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
@@ -27,6 +35,11 @@ import { User } from '../../../prisma/generated/prisma/client';
 import { CurrentUser } from '../../common/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../common/auth/jwt-auth.guard';
 import { ApiUuidParam } from '../../common/swagger/api-uuid-param.decorator';
+import {
+  ALLOWED_IMAGE_MIME_TYPES,
+  MAX_IMAGE_SIZE_BYTES,
+} from '../images/images.constants';
+import { ValidateImageFilePipe } from '../images/pipes/validate-image-file.pipe';
 import { CreateEventDto } from './dto/create-event.dto';
 import { DeclineEventDto } from './dto/decline-event.dto';
 import { EventResponseDto } from './dto/event-response.dto';
@@ -59,7 +72,10 @@ export class EventsController {
   })
   @ApiForbiddenResponse({ description: 'Caller is not a pupil' })
   @ApiConflictResponse({ description: 'Event with this name already exists' })
-  create(@CurrentUser() actor: User, @Body() dto: CreateEventDto): Promise<EventResponseDto> {
+  create(
+    @CurrentUser() actor: User,
+    @Body() dto: CreateEventDto,
+  ): Promise<EventResponseDto> {
     return this.eventsService.create(actor, dto);
   }
 
@@ -73,8 +89,13 @@ export class EventsController {
       'At least 5 such events at the same time, all successful: 0.9; no history: 0.5.',
   })
   @ApiOkResponse({ type: ProbabilityResponseDto })
-  @ApiBadRequestResponse({ description: 'Invalid category, or startsAt is not a date-time with a timezone' })
-  async previewProbability(@Query() query: ProbabilityQueryDto): Promise<ProbabilityResponseDto> {
+  @ApiBadRequestResponse({
+    description:
+      'Invalid category, or startsAt is not a date-time with a timezone',
+  })
+  async previewProbability(
+    @Query() query: ProbabilityQueryDto,
+  ): Promise<ProbabilityResponseDto> {
     return {
       successProbability: await this.eventsService.previewProbability(
         query.category,
@@ -127,7 +148,9 @@ export class EventsController {
   })
   @ApiOkResponse({ type: [EventResponseDto] })
   @ApiForbiddenResponse({ description: 'Caller is not an admin' })
-  findForAdminModeration(@CurrentUser() actor: User): Promise<EventResponseDto[]> {
+  findForAdminModeration(
+    @CurrentUser() actor: User,
+  ): Promise<EventResponseDto[]> {
     return this.eventsService.findForAdminModeration(actor);
   }
 
@@ -157,7 +180,10 @@ export class EventsController {
   @ApiOkResponse({ type: EventResponseDto })
   @ApiForbiddenResponse({ description: 'Caller is not the assigned teacher' })
   @ApiNotFoundResponse({ description: 'Event not found' })
-  @ApiConflictResponse({ description: 'Event is not on moderation anymore, or voting for it has closed (2 days before the start)' })
+  @ApiConflictResponse({
+    description:
+      'Event is not on moderation anymore, or voting for it has closed (2 days before the start)',
+  })
   approve(
     @CurrentUser() actor: User,
     @Param('id', ParseUUIDPipe) id: string,
@@ -169,14 +195,18 @@ export class EventsController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Decline an event',
-    description: 'Assigned teacher only. ON_MODERATION -> DECLINED, with an optional reason.',
+    description:
+      'Assigned teacher only. ON_MODERATION -> DECLINED, with an optional reason.',
   })
   @ApiUuidParam('reason is empty or longer than 2000 characters')
   @ApiBody({ type: DeclineEventDto, required: false })
   @ApiOkResponse({ type: EventResponseDto })
   @ApiForbiddenResponse({ description: 'Caller is not the assigned teacher' })
   @ApiNotFoundResponse({ description: 'Event not found' })
-  @ApiConflictResponse({ description: 'Event is not on moderation anymore, or voting for it has closed (2 days before the start)' })
+  @ApiConflictResponse({
+    description:
+      'Event is not on moderation anymore, or voting for it has closed (2 days before the start)',
+  })
   decline(
     @CurrentUser() actor: User,
     @Param('id', ParseUUIDPipe) id: string,
@@ -195,7 +225,9 @@ export class EventsController {
   @ApiOkResponse({ type: EventResponseDto })
   @ApiForbiddenResponse({ description: 'Caller is not an admin' })
   @ApiNotFoundResponse({ description: 'Event not found' })
-  @ApiConflictResponse({ description: 'Event is not on admin moderation, or has already started' })
+  @ApiConflictResponse({
+    description: 'Event is not on admin moderation, or has already started',
+  })
   adminApprove(
     @CurrentUser() actor: User,
     @Param('id', ParseUUIDPipe) id: string,
@@ -207,20 +239,96 @@ export class EventsController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Admin declines an event',
-    description: 'Admin only. ON_ADMIN_MODERATION -> DECLINED_BY_ADMIN, with an optional reason.',
+    description:
+      'Admin only. ON_ADMIN_MODERATION -> DECLINED_BY_ADMIN, with an optional reason.',
   })
   @ApiUuidParam('reason is empty or longer than 2000 characters')
   @ApiBody({ type: DeclineEventDto, required: false })
   @ApiOkResponse({ type: EventResponseDto })
   @ApiForbiddenResponse({ description: 'Caller is not an admin' })
   @ApiNotFoundResponse({ description: 'Event not found' })
-  @ApiConflictResponse({ description: 'Event is not on admin moderation, or has already started' })
+  @ApiConflictResponse({
+    description: 'Event is not on admin moderation, or has already started',
+  })
   adminDecline(
     @CurrentUser() actor: User,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: DeclineEventDto,
   ): Promise<EventResponseDto> {
     return this.eventsService.adminDecline(actor, id, dto);
+  }
+
+  @Put(':id/image')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: MAX_IMAGE_SIZE_BYTES, files: 1 },
+    }),
+  )
+  @ApiOperation({
+    summary: 'Set or replace the event image',
+    description:
+      'Author only, while the event is pending (ON_MODERATION, ON_VOTE, ON_ADMIN_MODERATION) and not past its deadline. ' +
+      `An event has at most one image: a new upload replaces and deletes the previous one. multipart/form-data, field "file": ${ALLOWED_IMAGE_MIME_TYPES.join(', ')}, up to 5 MB; the type is checked by the file content.`,
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['file'],
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+          description: 'JPEG, PNG, WebP or GIF, up to 5 MB',
+        },
+      },
+    },
+  })
+  @ApiUuidParam('the file is missing, or is not a JPEG/PNG/WebP/GIF image')
+  @ApiOkResponse({
+    type: EventResponseDto,
+    description: 'The event with its new imageUrl',
+  })
+  @ApiForbiddenResponse({ description: 'Caller is not the author' })
+  @ApiNotFoundResponse({ description: 'Event not found' })
+  @ApiConflictResponse({
+    description: 'The event is already decided (or past its deadline)',
+  })
+  @ApiPayloadTooLargeResponse({ description: 'File is larger than 5 MB' })
+  @ApiBadGatewayResponse({
+    description: 'The image storage (Cloudinary) rejected the upload',
+  })
+  setImage(
+    @CurrentUser() actor: User,
+    @Param('id', ParseUUIDPipe) id: string,
+    @UploadedFile(ValidateImageFilePipe) file: Express.Multer.File,
+  ): Promise<EventResponseDto> {
+    return this.eventsService.setImage(actor, id, file);
+  }
+
+  @Delete(':id/image')
+  @ApiOperation({
+    summary: 'Remove the event image',
+    description:
+      'Author while the event is pending and not past its deadline; an admin in any status. Does nothing if the event has no image.',
+  })
+  @ApiUuidParam()
+  @ApiOkResponse({
+    type: EventResponseDto,
+    description: 'The event, imageUrl is null',
+  })
+  @ApiForbiddenResponse({
+    description: 'Caller is neither the author nor an admin',
+  })
+  @ApiNotFoundResponse({ description: 'Event not found' })
+  @ApiConflictResponse({
+    description: 'Author: the event is already decided (or past its deadline)',
+  })
+  removeImage(
+    @CurrentUser() actor: User,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<EventResponseDto> {
+    return this.eventsService.removeImage(actor, id);
   }
 
   @Post(':id/vote')
@@ -232,9 +340,14 @@ export class EventsController {
   })
   @ApiUuidParam()
   @ApiOkResponse({ type: EventVoteResponseDto })
-  @ApiForbiddenResponse({ description: "Caller is not a pupil, or is outside the event's scope" })
+  @ApiForbiddenResponse({
+    description: "Caller is not a pupil, or is outside the event's scope",
+  })
   @ApiNotFoundResponse({ description: 'Event not found' })
-  @ApiConflictResponse({ description: 'Event is not on vote, voting has closed (2 days before the start), or the pupil has already voted' })
+  @ApiConflictResponse({
+    description:
+      'Event is not on vote, voting has closed (2 days before the start), or the pupil has already voted',
+  })
   vote(
     @CurrentUser() actor: User,
     @Param('id', ParseUUIDPipe) id: string,

@@ -4,7 +4,11 @@ import { EventResponseDto } from './dto/event-response.dto';
 import { votingClosesAt } from './event-deadlines';
 import { VotingEventResponseDto } from './dto/voting-event-response.dto';
 
-export type EventWithUsers = Event & { initiator: User; teacher: User };
+export type EventWithUsers = Event & {
+  initiator: User;
+  teacher: User;
+  image: { url: string } | null;
+};
 
 // Explicit field list: never leak extra columns added to the model later.
 export function toEventResponse(
@@ -23,6 +27,7 @@ export function toEventResponse(
     startsAt: event.startsAt,
     votingClosesAt: votingClosesAt(event.startsAt),
     successProbability,
+    imageUrl: event.image?.url ?? null,
     initiator: toUserResponse(event.initiator),
     teacher: toUserResponse(event.teacher),
     createdAt: event.createdAt,

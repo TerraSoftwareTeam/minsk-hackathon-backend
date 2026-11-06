@@ -13,6 +13,7 @@ import {
   UserRoles,
 } from '../../../prisma/generated/prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ImagesService } from '../images/images.service';
 import { EventWithUsers } from './event.mapper';
 import { EventsService } from './events.service';
 
@@ -55,6 +56,8 @@ const storedEvent = (over: Partial<EventWithUsers> = {}): EventWithUsers => ({
   teacher,
   createdAt: new Date('2026-11-06T10:00:00Z'),
   updatedAt: new Date('2026-11-06T10:00:00Z'),
+  imageId: null,
+  image: null,
   ...over,
 });
 
@@ -71,6 +74,7 @@ describe('EventsService', () => {
     eventVote: { create: jest.Mock; count: jest.Mock };
     $transaction: jest.Mock;
   };
+  let images: { uploadImage: jest.Mock; deleteImage: jest.Mock };
   // Client used inside prisma.$transaction(fn).
   let tx: {
     $queryRaw: jest.Mock;
@@ -103,7 +107,11 @@ describe('EventsService', () => {
       },
       event: { update: jest.fn().mockResolvedValue({}) },
     };
-    service = new EventsService(prisma as unknown as PrismaService);
+    images = {
+      uploadImage: jest.fn().mockResolvedValue({ id: 'img-new', url: 'https://cdn/new.jpg' }),
+      deleteImage: jest.fn().mockResolvedValue(undefined),
+    };
+    service = new EventsService(prisma as unknown as PrismaService, images as unknown as ImagesService);
   });
 
   describe('create', () => {
@@ -195,7 +203,7 @@ describe('EventsService', () => {
           status: EventStatuses.ON_MODERATION,
           startsAt: { gt: expect.any(Date) },
         },
-        include: { initiator: true, teacher: true },
+        include: { initiator: true, teacher: true, image: { select: { url: true } } },
         orderBy: { createdAt: 'asc' },
       });
       expect(result).toHaveLength(1);
@@ -315,6 +323,7 @@ describe('EventsService', () => {
         include: {
           initiator: true,
           teacher: true,
+          image: { select: { url: true } },
           votes: { where: { voterId: pupil.id }, select: { voterId: true } },
           _count: { select: { votes: true } },
         },
@@ -371,6 +380,7 @@ describe('EventsService', () => {
         include: {
           initiator: true,
           teacher: true,
+          image: { select: { url: true } },
           votes: { where: { voterId: pupil.id }, select: { voterId: true } },
           _count: { select: { votes: true } },
         },
@@ -420,7 +430,7 @@ describe('EventsService', () => {
 
       expect(prisma.event.findMany).toHaveBeenCalledWith({
         where: { status: EventStatuses.ON_ADMIN_MODERATION, startsAt: { gt: expect.any(Date) } },
-        include: { initiator: true, teacher: true },
+        include: { initiator: true, teacher: true, image: { select: { url: true } } },
         orderBy: { createdAt: 'asc' },
       });
     });
@@ -759,6 +769,124 @@ describe('EventsService', () => {
       const result = await service.findForAdminModeration(admin);
       expect(result.map((e) => e.successProbability)).toEqual([0.5, 0.5]);
       expect(prisma.event.findMany).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('event image', () => {
+    const upload = { originalname: 'a.jpg', mimetype: 'image/jpeg', size: 10, buffer: Buffer.from([0xff, 0xd8, 0xff]) } as Express.Multer.File;
+    /** Row as seen under the lock inside the transaction. */
+    const lockedRow = (over: Partial<{ status: EventStatuses; startsAt: Date; imageId: string | null }> = {}) => [
+      { status: EventStatuses.ON_MODERATION, startsAt: FUTURE, imageId: null, ...over },
+    ];
+    beforeEach(() => {
+      (tx.event as { update: jest.Mock }).update.mockResolvedValue({});
+    });
+
+    it.each([EventStatuses.ON_MODERATION, EventStatuses.ON_VOTE, EventStatuses.ON_ADMIN_MODERATION])(
+      'author sets an image while the event is %s',
+      async (status) => {
+        prisma.event.findUnique.mockResolvedValue(storedEvent({ status }));
+        tx.$queryRaw.mockResolvedValue(lockedRow({ status }));
+
+        await service.setImage(pupil, 'event-1', upload);
+        expect(images.uploadImage).toHaveBeenCalledWith(pupil.id, upload);
+        expect(tx.event.update).toHaveBeenCalledWith({ where: { id: 'event-1' }, data: { imageId: 'img-new' } });
+        expect(images.deleteImage).not.toHaveBeenCalled();
+      },
+    );
+
+    it('replacing keeps one image: the previous one is deleted', async () => {
+      prisma.event.findUnique.mockResolvedValue(storedEvent({ imageId: 'img-old' }));
+      tx.$queryRaw.mockResolvedValue(lockedRow({ imageId: 'img-old' }));
+
+      await service.setImage(pupil, 'event-1', upload);
+      expect(images.deleteImage).toHaveBeenCalledWith('img-old');
+      expect(images.deleteImage).toHaveBeenCalledTimes(1);
+    });
+
+    it('response carries the image url', async () => {
+      prisma.event.findUnique
+        .mockResolvedValueOnce(storedEvent())
+        .mockResolvedValueOnce(storedEvent({ imageId: 'img-new', image: { url: 'https://cdn/new.jpg' } }));
+      tx.$queryRaw.mockResolvedValue(lockedRow());
+
+      const result = await service.setImage(pupil, 'event-1', upload);
+      expect(result.imageUrl).toBe('https://cdn/new.jpg');
+    });
+
+    it.each([
+      ['another pupil', otherPupil],
+      ['the teacher', teacher],
+      ['an admin', admin],
+    ])('%s cannot set the image', async (_name, actor) => {
+      await expect(service.setImage(actor, 'event-1', upload)).rejects.toBeInstanceOf(ForbiddenException);
+      expect(images.uploadImage).not.toHaveBeenCalled();
+    });
+
+    it.each([EventStatuses.FINALIZED, EventStatuses.DECLINED, EventStatuses.DECLINED_BY_ADMIN, EventStatuses.EXPIRED])(
+      'author cannot set an image once the event is %s',
+      async (status) => {
+        prisma.event.findUnique.mockResolvedValue(storedEvent({ status }));
+        await expect(service.setImage(pupil, 'event-1', upload)).rejects.toBeInstanceOf(ConflictException);
+        expect(images.uploadImage).not.toHaveBeenCalled();
+      },
+    );
+
+    it('author cannot set an image past the deadline, before the scheduler expires it', async () => {
+      prisma.event.findUnique.mockResolvedValue(storedEvent({ status: EventStatuses.ON_VOTE, startsAt: IN_TWO_DAYS_WINDOW }));
+      await expect(service.setImage(pupil, 'event-1', upload)).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('decided during the upload: nothing changes and the new upload is deleted', async () => {
+      prisma.event.findUnique.mockResolvedValue(storedEvent());
+      tx.$queryRaw.mockResolvedValue(lockedRow({ status: EventStatuses.DECLINED }));
+
+      await expect(service.setImage(pupil, 'event-1', upload)).rejects.toBeInstanceOf(ConflictException);
+      expect(tx.event.update).not.toHaveBeenCalled();
+      expect(images.deleteImage).toHaveBeenCalledWith('img-new');
+    });
+
+    it('author removes the image while pending', async () => {
+      prisma.event.findUnique.mockResolvedValue(storedEvent({ imageId: 'img-old' }));
+      tx.$queryRaw.mockResolvedValue(lockedRow({ imageId: 'img-old' }));
+
+      await service.removeImage(pupil, 'event-1');
+      expect(tx.event.update).toHaveBeenCalledWith({ where: { id: 'event-1' }, data: { imageId: null } });
+      expect(images.deleteImage).toHaveBeenCalledWith('img-old');
+    });
+
+    it('admin removes the image even after FINALIZED', async () => {
+      prisma.event.findUnique.mockResolvedValue(storedEvent({ status: EventStatuses.FINALIZED, imageId: 'img-old' }));
+      tx.$queryRaw.mockResolvedValue(lockedRow({ status: EventStatuses.FINALIZED, imageId: 'img-old' }));
+
+      await service.removeImage(admin, 'event-1');
+      expect(images.deleteImage).toHaveBeenCalledWith('img-old');
+    });
+
+    it('author cannot remove the image after FINALIZED', async () => {
+      prisma.event.findUnique.mockResolvedValue(storedEvent({ status: EventStatuses.FINALIZED, imageId: 'img-old' }));
+      await expect(service.removeImage(pupil, 'event-1')).rejects.toBeInstanceOf(ConflictException);
+      expect(images.deleteImage).not.toHaveBeenCalled();
+    });
+
+    it('teacher cannot remove the image', async () => {
+      prisma.event.findUnique.mockResolvedValue(storedEvent({ imageId: 'img-old' }));
+      await expect(service.removeImage(teacher, 'event-1')).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('removing when there is no image does nothing', async () => {
+      tx.$queryRaw.mockResolvedValue(lockedRow());
+      await expect(service.removeImage(pupil, 'event-1')).resolves.toMatchObject({ imageUrl: null });
+      expect(tx.event.update).not.toHaveBeenCalled();
+      expect(images.deleteImage).not.toHaveBeenCalled();
+    });
+
+    it('a failed cleanup of the old image does not fail the request', async () => {
+      prisma.event.findUnique.mockResolvedValue(storedEvent({ imageId: 'img-old' }));
+      tx.$queryRaw.mockResolvedValue(lockedRow({ imageId: 'img-old' }));
+      images.deleteImage.mockRejectedValue(new Error('cloudinary down'));
+
+      await expect(service.setImage(pupil, 'event-1', upload)).resolves.toBeDefined();
     });
   });
 });

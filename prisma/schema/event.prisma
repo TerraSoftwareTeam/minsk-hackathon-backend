@@ -22,6 +22,10 @@ model Event {
 
   votes EventVote[]
 
+  /// Optional picture: at most one per event (unique). Deleting the image clears it.
+  image   Image?  @relation("EventImage", fields: [imageId], references: [id], onDelete: SetNull)
+  imageId String? @unique
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

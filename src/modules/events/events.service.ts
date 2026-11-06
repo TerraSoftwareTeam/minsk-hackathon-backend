@@ -15,6 +15,7 @@ import {
   UserRoles,
 } from '../../../prisma/generated/prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ImagesService } from '../images/images.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { DeclineEventDto } from './dto/decline-event.dto';
 import { EventResponseDto } from './dto/event-response.dto';
@@ -34,7 +35,7 @@ import {
 } from './event-probability';
 import { EventWithUsers, toEventResponse, toVotingEventResponse } from './event.mapper';
 
-const WITH_USERS = { initiator: true, teacher: true } as const;
+const WITH_USERS = { initiator: true, teacher: true, image: { select: { url: true } } } as const;
 
 /** WITH_USERS plus the caller's own vote (0 or 1 rows) and the total vote count. */
 const withVoteState = (voterId: string) =>
@@ -94,12 +95,19 @@ const ADMIN_MODERATION: ModerationStage = {
  * before the scheduler runs, and the queues and the voting feed hide the event.
  *
  * Who may read an event: its initiator, its assigned teacher, any admin.
+ *
+ * Image (optional, at most one per event): the author sets, replaces or
+ * removes it until the event is decided, i.e. while it is pending and not past
+ * its deadline. An admin may remove it in any status (e.g. an unsuitable picture).
  */
 @Injectable()
 export class EventsService {
   private readonly logger = new Logger(EventsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly images: ImagesService,
+  ) {}
 
   async create(actor: User, dto: CreateEventDto): Promise<EventResponseDto> {
     if (actor.role !== UserRoles.PUPIL) {
@@ -290,6 +298,62 @@ export class EventsService {
     }
   }
 
+  /** Sets or replaces the event image. The previous image is deleted. */
+  async setImage(actor: User, id: string, file: Express.Multer.File): Promise<EventResponseDto> {
+    const event = await this.findEventOrThrow(id);
+    if (actor.id !== event.initiatorId) {
+      throw new ForbiddenException('Only the author can set the event image');
+    }
+    this.assertImageEditable(event);
+
+    // Uploaded outside the transaction: the row lock is not held during the network call.
+    const image = await this.images.uploadImage(actor.id, file);
+    let previousImageId: string | null;
+    try {
+      previousImageId = await this.prisma.$transaction(async (tx) => {
+        const locked = await this.lockForImage(tx, id);
+        // The status may have changed during the upload.
+        this.assertImageEditable(locked);
+        await tx.event.update({ where: { id }, data: { imageId: image.id } });
+        return locked.imageId;
+      });
+    } catch (error) {
+      await this.discardImage(image.id);
+      throw error;
+    }
+    if (previousImageId) {
+      await this.discardImage(previousImageId);
+    }
+    return this.toResponse(await this.findEventOrThrow(id));
+  }
+
+  /** Removes the event image, if there is one. The author until the decision, an admin always. */
+  async removeImage(actor: User, id: string): Promise<EventResponseDto> {
+    const event = await this.findEventOrThrow(id);
+    const isAdmin = actor.role === UserRoles.ADMIN;
+    if (!isAdmin && actor.id !== event.initiatorId) {
+      throw new ForbiddenException('Only the author or an admin can remove the event image');
+    }
+    if (!isAdmin) {
+      this.assertImageEditable(event);
+    }
+
+    const removedImageId = await this.prisma.$transaction(async (tx) => {
+      const locked = await this.lockForImage(tx, id);
+      if (!isAdmin) {
+        this.assertImageEditable(locked);
+      }
+      if (locked.imageId) {
+        await tx.event.update({ where: { id }, data: { imageId: null } });
+      }
+      return locked.imageId;
+    });
+    if (removedImageId) {
+      await this.discardImage(removedImageId);
+    }
+    return this.toResponse(await this.findEventOrThrow(id));
+  }
+
   /**
    * Pending events past the deadline of their status become EXPIRED.
    * Returns how many were expired. Safe to run concurrently with votes and
@@ -361,6 +425,42 @@ export class EventsService {
         ? { ...event, status: EventStatuses.EXPIRED }
         : event,
     );
+  }
+
+  /** The image can change while the event is pending and not past the deadline of its status. */
+  private assertImageEditable(event: { status: EventStatuses; startsAt: Date }): void {
+    const isPending = event.status in EXPIRES_BEFORE_START_MS;
+    if (!isPending || isPastDeadline(event.startsAt, EXPIRES_BEFORE_START_MS[event.status as PendingStatus])) {
+      throw new ConflictException(
+        `The image can be changed only until the event is decided, its status is ${event.status}`,
+      );
+    }
+  }
+
+  /** Locks the event row, so concurrent image changes are applied one at a time. */
+  private async lockForImage(
+    tx: Prisma.TransactionClient,
+    id: string,
+  ): Promise<{ status: EventStatuses; startsAt: Date; imageId: string | null }> {
+    const [locked] = await tx.$queryRaw<
+      { status: EventStatuses; startsAt: Date; imageId: string | null }[]
+    >`SELECT "status", "startsAt", "imageId" FROM "Event" WHERE "id" = ${id} FOR UPDATE`;
+    if (!locked) {
+      throw new NotFoundException('Event not found');
+    }
+    return locked;
+  }
+
+  /** Deletes an image no event uses anymore. A failure is logged, not returned: the event is already consistent. */
+  private async discardImage(imageId: string): Promise<void> {
+    try {
+      await this.images.deleteImage(imageId);
+    } catch (error) {
+      this.logger.error(
+        `Failed to delete image ${imageId}`,
+        error instanceof Error ? error.stack : error,
+      );
+    }
   }
 
   /** Votes are accepted only while the event is ON_VOTE and before the voting deadline. */

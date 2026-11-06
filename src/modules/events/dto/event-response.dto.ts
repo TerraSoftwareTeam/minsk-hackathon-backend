@@ -71,6 +71,14 @@ export class EventResponseDto {
   })
   successProbability!: number;
 
+  @ApiProperty({
+    example: 'https://res.cloudinary.com/demo/image/upload/v1/minsk_hackathon_images/3f2c9a4e.jpg',
+    nullable: true,
+    type: String,
+    description: 'Event image URL; null when the event has none. At most one image per event',
+  })
+  imageUrl!: string | null;
+
   @ApiProperty({ type: UserResponseDto, description: 'Pupil who created the event' })
   initiator!: UserResponseDto;
 

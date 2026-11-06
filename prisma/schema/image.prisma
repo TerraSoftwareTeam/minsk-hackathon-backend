@@ -10,6 +10,9 @@ model Image {
   uploadedBy   User?   @relation("UploadedImages", fields: [uploadedById], references: [id], onDelete: SetNull)
   uploadedById String?
 
+  /// The event that shows this image, if any.
+  event Event? @relation("EventImage")
+
   createdAt DateTime @default(now())
 
   @@index([uploadedById])
