@@ -1,4 +1,4 @@
-import { InternalServerErrorException } from '@nestjs/common';
+import { BadGatewayException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CLOUDINARY } from './cloudinary.provider';
@@ -103,6 +103,17 @@ describe('ImagesService', () => {
       });
     });
 
+    it('deletes the uploaded file when the database record cannot be created', async () => {
+      prisma.image.create.mockRejectedValue(new Error('db down'));
+
+      await expect(service.uploadImage('user-1', file)).rejects.toThrow(
+        'db down',
+      );
+      expect(cloudinary.uploader.destroy).toHaveBeenCalledWith(
+        uploadResult.public_id,
+      );
+    });
+
     it('throws when cloudinary returns an error', async () => {
       cloudinary.uploader.upload_stream.mockImplementation(
         (_options, callback) => ({
@@ -113,8 +124,9 @@ describe('ImagesService', () => {
       );
 
       await expect(service.uploadImage('user-1', file)).rejects.toThrow(
-        'upload failed',
+        BadGatewayException,
       );
+      expect(prisma.image.create).not.toHaveBeenCalled();
     });
 
     it('throws when cloudinary returns no result', async () => {
@@ -127,7 +139,7 @@ describe('ImagesService', () => {
       );
 
       await expect(service.uploadImage('user-1', file)).rejects.toThrow(
-        InternalServerErrorException,
+        BadGatewayException,
       );
     });
   });

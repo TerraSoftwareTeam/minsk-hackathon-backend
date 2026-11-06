@@ -1,15 +1,8 @@
+import { IsIn, IsInt, IsNotEmpty, IsString, Max, Min } from 'class-validator';
 import {
-  IsInt,
-  IsNotEmpty,
-  IsString,
-  Matches,
-  Max,
-  Min,
-} from 'class-validator';
-import { MAX_IMAGE_SIZE_BYTES } from '../images.constants';
-
-const IMAGE_MIME_TYPE_PATTERN =
-  /^image\/(jpeg|jpg|png|gif|webp|svg\+xml|bmp|tiff)$/i;
+  ALLOWED_IMAGE_MIME_TYPES,
+  MAX_IMAGE_SIZE_BYTES,
+} from '../images.constants';
 
 /** Validates the metadata of an uploaded file (see ValidateImageFilePipe). */
 export class UploadImageDto {
@@ -17,10 +10,9 @@ export class UploadImageDto {
   @IsNotEmpty()
   originalname!: string;
 
-  @IsString()
-  @IsNotEmpty()
-  @Matches(IMAGE_MIME_TYPE_PATTERN, {
-    message: 'Only image files are allowed',
+  /** Detected from the file bytes. */
+  @IsIn(ALLOWED_IMAGE_MIME_TYPES, {
+    message: `Only ${ALLOWED_IMAGE_MIME_TYPES.join(', ')} images are allowed`,
   })
   mimetype!: string;
 

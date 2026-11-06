@@ -1,7 +1,8 @@
 import {
+  BadGatewayException,
   Inject,
   Injectable,
-  InternalServerErrorException,
+  Logger,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { UploadApiResponse } from 'cloudinary';
@@ -14,6 +15,8 @@ import { ImageResponseDto } from './dto/image-response.dto';
 
 @Injectable()
 export class ImagesService {
+  private readonly logger = new Logger(ImagesService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     @Inject(CLOUDINARY)
@@ -26,16 +29,25 @@ export class ImagesService {
   ): Promise<ImageResponseDto> {
     const uploadResult = await this.uploadToCloudinary(file);
 
-    const image = await this.prisma.image.create({
-      data: {
-        url: uploadResult.secure_url,
-        cloudinaryPublicId: uploadResult.public_id,
-        originalFileName: file.originalname,
-        mimeType: file.mimetype,
-        sizeBytes: file.size,
-        uploadedById,
-      },
-    });
+    let image: Image;
+    try {
+      image = await this.prisma.image.create({
+        data: {
+          url: uploadResult.secure_url,
+          cloudinaryPublicId: uploadResult.public_id,
+          originalFileName: file.originalname,
+          mimeType: file.mimetype,
+          sizeBytes: file.size,
+          uploadedById,
+        },
+      });
+    } catch (error) {
+      // Without a row nothing references the uploaded file: remove it, keep the original error.
+      await this.cloudinary.uploader
+        .destroy(uploadResult.public_id)
+        .catch(() => undefined);
+      throw error;
+    }
 
     return this.toResponse(image);
   }
@@ -68,8 +80,15 @@ export class ImagesService {
         },
         (error, result) => {
           if (error || !result) {
+            // A storage failure is not the client's fault, and its details
+            // (account, permissions) are for the server log only.
+            this.logger.error(
+              `Cloudinary upload failed: ${error ? `${error.http_code ?? ''} ${error.message}` : 'no result'}`,
+            );
             reject(
-              error ?? new InternalServerErrorException('Image upload failed'),
+              new BadGatewayException(
+                'Image storage rejected the upload, try again later',
+              ),
             );
             return;
           }
