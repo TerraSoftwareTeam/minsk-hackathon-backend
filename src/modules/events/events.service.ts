@@ -36,23 +36,20 @@ import {
 } from './event-probability';
 import { DecisionStatus, EventModerationNotifier } from './event-moderation.notifier';
 import { assignEventsWithoutTeacher } from './teacher-assignment';
-import { EventRatingResponseDto } from './dto/event-rating-response.dto';
-import { RatingEventResponseDto } from './dto/rating-event-response.dto';
+import { EventLikeResponseDto } from './dto/event-like-response.dto';
 import {
   EventComputed,
-  EventRatingSummary,
   EventWithUsers,
   toEventResponse,
-  toRatingEventResponse,
   toVotingEventResponse,
 } from './event.mapper';
 
 /**
- * Statuses in which pupils may rate an event: approved by the teacher (ON_VOTE)
+ * Statuses in which pupils may like an event: approved by the teacher (ON_VOTE)
  * and every status after it. EXPIRED is left out: it is also reached straight
  * from ON_MODERATION, without the teacher's approval.
  */
-export const RATABLE_STATUSES = [
+export const LIKABLE_STATUSES = [
   EventStatuses.ON_VOTE,
   EventStatuses.ON_ADMIN_MODERATION,
   EventStatuses.FINALIZED,
@@ -61,11 +58,12 @@ export const RATABLE_STATUSES = [
 
 const WITH_USERS = { initiator: true, teacher: true, image: { select: { url: true } } } as const;
 
-/** WITH_USERS plus the caller's own vote (0 or 1 rows) and the total vote count. */
-const withVoteState = (voterId: string) =>
+/** WITH_USERS plus the caller's own vote and like (0 or 1 rows each) and the total vote count. */
+const withVoteState = (userId: string) =>
   ({
     ...WITH_USERS,
-    votes: { where: { voterId }, select: { voterId: true } },
+    votes: { where: { voterId: userId }, select: { voterId: true } },
+    likes: { where: { userId }, select: { userId: true } },
     _count: { select: { votes: true } },
   }) as const;
 
@@ -129,10 +127,9 @@ const ADMIN_MODERATION: ModerationStage = {
  * ON_ADMIN_MODERATION (4), the author on every decision of the teacher (2) and
  * of an admin (5). Sent after the change is committed.
  *
- * Rating: from ON_VOTE on (RATABLE_STATUSES) any pupil, not only the event's
- * audience, may rate the event with 1 to 5 stars, one rating per pupil, which
- * they can change. Every event response carries the
- * average and the count.
+ * Likes: from ON_VOTE on (LIKABLE_STATUSES) any pupil, not only the event's
+ * audience, may like the event, once, and take the like back in any status.
+ * Every event response carries the like count.
  *
  * Image (optional, at most one per event): the author sets, replaces or
  * removes it until the event is decided, i.e. while it is pending and not past
@@ -214,7 +211,7 @@ export class EventsService {
     return this.toResponses(events, toEventResponse);
   }
 
-  /** The author's own events in any status, newest first, with their vote count. */
+  /** The author's own events in any status, newest first, with their vote count and the author's like. */
   async findMine(actor: User): Promise<VotingEventResponseDto[]> {
     if (actor.role !== UserRoles.PUPIL) {
       throw new ForbiddenException(
@@ -257,22 +254,6 @@ export class EventsService {
       events.filter((event) => this.isInScope(actor.class, event.initiator.class, event.scope)),
       toVotingEventResponse,
     );
-  }
-
-  /**
-   * Pupil's rating feed: every event in a RATABLE_STATUSES status, of any
-   * class and scope, newest first, with the pupil's own rating.
-   */
-  async findForRating(actor: User): Promise<RatingEventResponseDto[]> {
-    if (actor.role !== UserRoles.PUPIL) {
-      throw new ForbiddenException('Only a pupil has a rating list');
-    }
-    const events = await this.prisma.event.findMany({
-      where: { status: { in: [...RATABLE_STATUSES] } },
-      include: { ...WITH_USERS, ratings: { where: { raterId: actor.id }, select: { stars: true } } },
-      orderBy: { createdAt: 'desc' },
-    });
-    return this.toResponses(events, toRatingEventResponse);
   }
 
   /** Admin queue: events that passed the vote and await an admin decision, oldest first. */
@@ -371,40 +352,48 @@ export class EventsService {
   }
 
   /**
-   * Any pupil rates an event in a RATABLE_STATUSES status, whatever its scope.
-   * A second call changes the pupil's rating, it never adds another one.
+   * Any pupil likes an event in a LIKABLE_STATUSES status, whatever its scope:
+   * +1 to its count. A second like by the same pupil changes nothing.
    */
-  async rate(actor: User, id: string, stars: number): Promise<EventRatingResponseDto> {
+  async like(actor: User, id: string): Promise<EventLikeResponseDto> {
     if (actor.role !== UserRoles.PUPIL) {
-      throw new ForbiddenException('Only a pupil can rate an event');
+      throw new ForbiddenException('Only a pupil can like an event');
     }
     const event = await this.prisma.event.findUnique({ where: { id }, select: { status: true } });
     if (!event) {
       throw new NotFoundException('Event not found');
     }
-    if (!(RATABLE_STATUSES as readonly EventStatuses[]).includes(event.status)) {
+    if (!(LIKABLE_STATUSES as readonly EventStatuses[]).includes(event.status)) {
       throw new ConflictException(
-        `The event can be rated once the teacher has approved it, its status is ${event.status}`,
+        `The event can be liked once the teacher has approved it, its status is ${event.status}`,
       );
     }
+    // skipDuplicates: a repeated or concurrent like of the same pupil is a no-op, not an error.
+    await this.prisma.eventLike.createMany({
+      data: [{ eventId: id, userId: actor.id }],
+      skipDuplicates: true,
+    });
+    return { eventId: id, liked: true, likesCount: await this.countLikes(id) };
+  }
 
-    const key = { eventId_raterId: { eventId: id, raterId: actor.id } };
-    try {
-      await this.prisma.eventRating.upsert({
-        where: key,
-        create: { eventId: id, raterId: actor.id, stars },
-        update: { stars },
-      });
-    } catch (error) {
-      // Two first ratings of the same pupil at once: the other one created the row.
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        await this.prisma.eventRating.update({ where: key, data: { stars } });
-      } else {
-        throw error;
-      }
+  /**
+   * Takes the pupil's like back: -1 to the count. Allowed in any status (e.g.
+   * after the event expired). Without a like there is nothing to take back.
+   */
+  async unlike(actor: User, id: string): Promise<EventLikeResponseDto> {
+    if (actor.role !== UserRoles.PUPIL) {
+      throw new ForbiddenException('Only a pupil can like an event');
     }
-    const summary = (await this.loadRatings([id])).get(id)!;
-    return { eventId: id, stars, ratingAverage: summary.average!, ratingsCount: summary.count };
+    const event = await this.prisma.event.findUnique({ where: { id }, select: { id: true } });
+    if (!event) {
+      throw new NotFoundException('Event not found');
+    }
+    await this.prisma.eventLike.deleteMany({ where: { eventId: id, userId: actor.id } });
+    return { eventId: id, liked: false, likesCount: await this.countLikes(id) };
+  }
+
+  private countLikes(eventId: string): Promise<number> {
+    return this.prisma.eventLike.count({ where: { eventId } });
   }
 
   /** Sets or replaces the event image. The previous image is deleted. */
@@ -490,7 +479,7 @@ export class EventsService {
     return response;
   }
 
-  /** Maps events with their success probability and rating, loading them once for all of the events. */
+  /** Maps events with their success probability and like count, loading them once for all of the events. */
   private async toResponses<E extends EventWithUsers, R>(
     events: E[],
     map: (event: E, computed: EventComputed) => R,
@@ -498,37 +487,26 @@ export class EventsService {
     if (events.length === 0) {
       return [];
     }
-    const [history, ratings] = await Promise.all([
+    const [history, likes] = await Promise.all([
       this.loadHistory(events),
-      this.loadRatings(events.map((event) => event.id)),
+      this.loadLikeCounts(events.map((event) => event.id)),
     ]);
     return events.map((event) =>
       map(event, {
         successProbability: computeSuccessProbability(event.category, event.startsAt, history, event.id),
-        rating: ratings.get(event.id)!,
+        likesCount: likes.get(event.id) ?? 0,
       }),
     );
   }
 
-  /** Average stars (2 decimals, null without ratings) and the number of ratings of each event. */
-  private async loadRatings(eventIds: string[]): Promise<Map<string, EventRatingSummary>> {
-    const groups = await this.prisma.eventRating.groupBy({
+  /** Number of likes of each event; events without likes are missing from the map. */
+  private async loadLikeCounts(eventIds: string[]): Promise<Map<string, number>> {
+    const groups = await this.prisma.eventLike.groupBy({
       by: ['eventId'],
       where: { eventId: { in: eventIds } },
-      _avg: { stars: true },
       _count: { _all: true },
     });
-    const summaries = new Map<string, EventRatingSummary>(
-      eventIds.map((id) => [id, { average: null, count: 0 }]),
-    );
-    for (const group of groups) {
-      const average = group._avg.stars;
-      summaries.set(group.eventId, {
-        average: average === null ? null : Math.round(average * 100) / 100,
-        count: group._count._all,
-      });
-    }
-    return summaries;
+    return new Map(groups.map((group) => [group.eventId, group._count._all]));
   }
 
   /**

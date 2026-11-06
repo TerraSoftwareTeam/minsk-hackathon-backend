@@ -74,7 +74,7 @@ describe('EventsService', () => {
       updateMany: jest.Mock;
     };
     eventVote: { create: jest.Mock; count: jest.Mock };
-    eventRating: { groupBy: jest.Mock; upsert: jest.Mock; update: jest.Mock };
+    eventLike: { groupBy: jest.Mock; createMany: jest.Mock; deleteMany: jest.Mock; count: jest.Mock };
     $transaction: jest.Mock;
   };
   let images: { uploadImage: jest.Mock; deleteImage: jest.Mock };
@@ -99,10 +99,11 @@ describe('EventsService', () => {
         create: jest.fn(),
         count: jest.fn(),
       },
-      eventRating: {
+      eventLike: {
         groupBy: jest.fn().mockResolvedValue([]),
-        upsert: jest.fn().mockResolvedValue({}),
-        update: jest.fn().mockResolvedValue({}),
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+        deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+        count: jest.fn().mockResolvedValue(0),
       },
       $transaction: jest.fn((fn: (client: typeof tx) => unknown) => fn(tx)),
     };
@@ -362,11 +363,13 @@ describe('EventsService', () => {
         {
           ...storedEvent({ id: 'e2', status: EventStatuses.DECLINED }),
           votes: [],
+          likes: [],
           _count: { votes: 0 },
         },
         {
           ...storedEvent({ id: 'e1', status: EventStatuses.ON_VOTE }),
           votes: [{ voterId: pupil.id }],
+          likes: [{ userId: pupil.id }],
           _count: { votes: 4 },
         },
       ]);
@@ -380,6 +383,7 @@ describe('EventsService', () => {
           teacher: true,
           image: { select: { url: true } },
           votes: { where: { voterId: pupil.id }, select: { voterId: true } },
+          likes: { where: { userId: pupil.id }, select: { userId: true } },
           _count: { select: { votes: true } },
         },
         orderBy: { createdAt: 'desc' },
@@ -389,6 +393,7 @@ describe('EventsService', () => {
         ['e1', EventStatuses.ON_VOTE, 4],
       ]);
       expect(result[1].hasVoted).toBe(true);
+      expect(result.map((e) => e.likedByMe)).toEqual([false, true]);
     });
 
     it.each([
@@ -405,7 +410,7 @@ describe('EventsService', () => {
       id: string,
       scope: Scopes,
       initiatorClass: string,
-      over: { votes?: { voterId: string }[]; votesCount?: number } = {},
+      over: { votes?: { voterId: string }[]; votesCount?: number; liked?: boolean } = {},
     ) => ({
       ...storedEvent({
         id,
@@ -414,6 +419,7 @@ describe('EventsService', () => {
         initiator: { ...otherPupil, class: initiatorClass },
       }),
       votes: over.votes ?? [],
+      likes: over.liked ? [{ userId: pupil.id }] : [],
       _count: { votes: over.votesCount ?? 0 },
     });
 
@@ -437,6 +443,7 @@ describe('EventsService', () => {
           teacher: true,
           image: { select: { url: true } },
           votes: { where: { voterId: pupil.id }, select: { voterId: true } },
+          likes: { where: { userId: pupil.id }, select: { userId: true } },
           _count: { select: { votes: true } },
         },
         orderBy: { createdAt: 'desc' },
@@ -449,6 +456,7 @@ describe('EventsService', () => {
         votingEvent('grade-same', Scopes.GRADE, '10Б', {
           votes: [{ voterId: pupil.id }],
           votesCount: 7,
+          liked: true,
         }),
         votingEvent('grade-other', Scopes.GRADE, '11A'),
         votingEvent('grade-prefix', Scopes.GRADE, '1A'),
@@ -458,9 +466,10 @@ describe('EventsService', () => {
       const result = await service.findForVoting(pupil);
 
       expect(result.map((e) => e.id)).toEqual(['school', 'grade-same', 'class-same']);
-      expect(result[1]).toMatchObject({ votesCount: 7, hasVoted: true });
-      expect(result[0]).toMatchObject({ votesCount: 0, hasVoted: false });
+      expect(result[1]).toMatchObject({ votesCount: 7, hasVoted: true, likedByMe: true });
+      expect(result[0]).toMatchObject({ votesCount: 0, hasVoted: false, likedByMe: false });
       expect(result[0]).not.toHaveProperty('votes');
+      expect(result[0]).not.toHaveProperty('likes');
       expect(result[0]).not.toHaveProperty('_count');
     });
 
@@ -831,6 +840,7 @@ describe('EventsService', () => {
       const listed = {
         ...storedEvent({ status, scope: Scopes.SCHOOL }),
         votes: [],
+        likes: [],
         _count: { votes: 0 },
       };
       prisma.event.findMany
@@ -970,24 +980,23 @@ describe('EventsService', () => {
     });
   });
 
-  describe('rating', () => {
+  describe('likes', () => {
     beforeEach(() => {
       prisma.event.findUnique.mockResolvedValue({ status: EventStatuses.ON_VOTE });
-      prisma.eventRating.groupBy.mockResolvedValue([
-        { eventId: 'event-1', _avg: { stars: 13 / 3 }, _count: { _all: 3 } },
-      ]);
+      prisma.eventLike.count.mockResolvedValue(3);
+      prisma.eventLike.groupBy.mockResolvedValue([{ eventId: 'event-1', _count: { _all: 3 } }]);
     });
 
-    it('a pupil rates an ON_VOTE event', async () => {
-      const result = await service.rate(otherPupil, 'event-1', 5);
+    it('a pupil likes an ON_VOTE event: +1, a repeat is a no-op', async () => {
+      const result = await service.like(otherPupil, 'event-1');
 
       expect(prisma.event.findUnique).toHaveBeenCalledWith({ where: { id: 'event-1' }, select: { status: true } });
-      expect(prisma.eventRating.upsert).toHaveBeenCalledWith({
-        where: { eventId_raterId: { eventId: 'event-1', raterId: otherPupil.id } },
-        create: { eventId: 'event-1', raterId: otherPupil.id, stars: 5 },
-        update: { stars: 5 },
+      expect(prisma.eventLike.createMany).toHaveBeenCalledWith({
+        data: [{ eventId: 'event-1', userId: otherPupil.id }],
+        skipDuplicates: true,
       });
-      expect(result).toEqual({ eventId: 'event-1', stars: 5, ratingAverage: 4.33, ratingsCount: 3 });
+      expect(prisma.eventLike.count).toHaveBeenCalledWith({ where: { eventId: 'event-1' } });
+      expect(result).toEqual({ eventId: 'event-1', liked: true, likesCount: 3 });
     });
 
     it.each([
@@ -995,100 +1004,61 @@ describe('EventsService', () => {
       EventStatuses.ON_ADMIN_MODERATION,
       EventStatuses.FINALIZED,
       EventStatuses.DECLINED_BY_ADMIN,
-    ])('%s can be rated', async (status) => {
+    ])('%s can be liked', async (status) => {
       prisma.event.findUnique.mockResolvedValue({ status });
-      await expect(service.rate(otherPupil, 'event-1', 3)).resolves.toBeDefined();
+      await expect(service.like(otherPupil, 'event-1')).resolves.toBeDefined();
     });
 
-    it('a pupil of any class rates, the scope does not matter', async () => {
-      await expect(service.rate({ ...otherPupil, class: '5B' }, 'event-1', 5)).resolves.toBeDefined();
-      await expect(service.rate({ ...otherPupil, class: null }, 'event-1', 5)).resolves.toBeDefined();
+    it('a pupil of any class likes, the scope does not matter; the author too', async () => {
+      await expect(service.like({ ...otherPupil, class: '5B' }, 'event-1')).resolves.toBeDefined();
+      await expect(service.like({ ...otherPupil, class: null }, 'event-1')).resolves.toBeDefined();
+      await expect(service.like(pupil, 'event-1')).resolves.toBeDefined();
     });
 
-    it('the author may rate their own event too', async () => {
-      await expect(service.rate(pupil, 'event-1', 4)).resolves.toBeDefined();
-    });
-
-    it('a concurrent first rating of the same pupil turns into an update', async () => {
-      prisma.eventRating.upsert.mockRejectedValue(
-        new Prisma.PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: 'test' }),
-      );
-      await service.rate(otherPupil, 'event-1', 2);
-      expect(prisma.eventRating.update).toHaveBeenCalledWith({
-        where: { eventId_raterId: { eventId: 'event-1', raterId: otherPupil.id } },
-        data: { stars: 2 },
-      });
-    });
-
-    it.each([['teacher', teacher], ['admin', admin]])('%s cannot rate', async (_name, actor) => {
-      await expect(service.rate(actor, 'event-1', 5)).rejects.toBeInstanceOf(ForbiddenException);
-      expect(prisma.eventRating.upsert).not.toHaveBeenCalled();
+    it.each([['teacher', teacher], ['admin', admin]])('%s cannot like or unlike', async (_name, actor) => {
+      await expect(service.like(actor, 'event-1')).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(service.unlike(actor, 'event-1')).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.eventLike.createMany).not.toHaveBeenCalled();
+      expect(prisma.eventLike.deleteMany).not.toHaveBeenCalled();
     });
 
     it.each([EventStatuses.ON_MODERATION, EventStatuses.DECLINED, EventStatuses.EXPIRED])(
-      'Conflict when the event is %s',
+      'Conflict, no like stored, when the event is %s',
       async (status) => {
         prisma.event.findUnique.mockResolvedValue({ status });
-        await expect(service.rate(otherPupil, 'event-1', 5)).rejects.toBeInstanceOf(ConflictException);
-        expect(prisma.eventRating.upsert).not.toHaveBeenCalled();
+        await expect(service.like(otherPupil, 'event-1')).rejects.toBeInstanceOf(ConflictException);
+        expect(prisma.eventLike.createMany).not.toHaveBeenCalled();
       },
     );
 
     it('NotFound for an unknown event', async () => {
       prisma.event.findUnique.mockResolvedValue(null);
-      await expect(service.rate(otherPupil, 'event-1', 5)).rejects.toBeInstanceOf(NotFoundException);
+      await expect(service.like(otherPupil, 'event-1')).rejects.toBeInstanceOf(NotFoundException);
+      await expect(service.unlike(otherPupil, 'event-1')).rejects.toBeInstanceOf(NotFoundException);
     });
 
-    it('rating feed: ratable events of every class and scope with the own rating', async () => {
-      prisma.event.findMany.mockImplementation((args: { include?: { ratings?: unknown } }) =>
-        args.include?.ratings
-          ? Promise.resolve([
-              { ...storedEvent({ status: EventStatuses.ON_VOTE }), ratings: [{ stars: 4 }] },
-              {
-                ...storedEvent({ id: 'event-2', status: EventStatuses.FINALIZED, initiator: { ...pupil, class: '11B' } }),
-                ratings: [],
-              },
-            ])
-          : Promise.resolve([]),
-      );
+    it('unlike takes the own like back: -1, in any status', async () => {
+      prisma.event.findUnique.mockResolvedValue({ id: 'event-1' });
+      prisma.eventLike.count.mockResolvedValue(2);
 
-      const result = await service.findForRating({ ...otherPupil, class: '5A' });
+      const result = await service.unlike(otherPupil, 'event-1');
 
-      expect(prisma.event.findMany.mock.calls[0][0]).toMatchObject({
-        where: {
-          status: {
-            in: [
-              EventStatuses.ON_VOTE,
-              EventStatuses.ON_ADMIN_MODERATION,
-              EventStatuses.FINALIZED,
-              EventStatuses.DECLINED_BY_ADMIN,
-            ],
-          },
-        },
-        include: { ratings: { where: { raterId: otherPupil.id }, select: { stars: true } } },
-        orderBy: { createdAt: 'desc' },
+      expect(prisma.eventLike.deleteMany).toHaveBeenCalledWith({
+        where: { eventId: 'event-1', userId: otherPupil.id },
       });
-      // No scope filter: a 5th-grader sees a CLASS event of 10A and an event of 11B.
-      expect(result.map((e) => [e.id, e.myRating, e.ratingAverage, e.ratingsCount])).toEqual([
-        ['event-1', 4, 4.33, 3],
-        ['event-2', null, null, 0],
-      ]);
+      expect(result).toEqual({ eventId: 'event-1', liked: false, likesCount: 2 });
     });
 
-    it.each([['teacher', teacher], ['admin', admin]])('%s has no rating feed', async (_name, actor) => {
-      await expect(service.findForRating(actor)).rejects.toBeInstanceOf(ForbiddenException);
-    });
-
-    it('every event response carries its rating', async () => {
+    it('every event response carries its like count', async () => {
       prisma.event.findUnique.mockResolvedValue(storedEvent());
       const result = await service.findOne(admin, 'event-1');
-      expect(prisma.eventRating.groupBy).toHaveBeenCalledWith({
+      expect(prisma.eventLike.groupBy).toHaveBeenCalledWith({
         by: ['eventId'],
         where: { eventId: { in: ['event-1'] } },
-        _avg: { stars: true },
         _count: { _all: true },
       });
-      expect([result.ratingAverage, result.ratingsCount]).toEqual([4.33, 3]);
+      expect(result.likesCount).toBe(3);
+      expect(result).not.toHaveProperty('ratingAverage');
     });
   });
 });

@@ -44,12 +44,10 @@ import { AdminApproveEventDto } from './dto/admin-approve-event.dto';
 import { CreateEventDto } from './dto/create-event.dto';
 import { DeclineEventDto } from './dto/decline-event.dto';
 import { EventResponseDto } from './dto/event-response.dto';
-import { EventRatingResponseDto } from './dto/event-rating-response.dto';
+import { EventLikeResponseDto } from './dto/event-like-response.dto';
 import { EventVoteResponseDto } from './dto/event-vote-response.dto';
 import { ProbabilityQueryDto } from './dto/probability-query.dto';
 import { ProbabilityResponseDto } from './dto/probability-response.dto';
-import { RateEventDto } from './dto/rate-event.dto';
-import { RatingEventResponseDto } from './dto/rating-event-response.dto';
 import { VotingEventResponseDto } from './dto/voting-event-response.dto';
 import { EventsService } from './events.service';
 
@@ -84,7 +82,7 @@ export class EventsController {
     return this.eventsService.create(actor, dto);
   }
 
-  // Declared before ':id' so "probability", "my", "voting", "for-rating", "moderation" and "admin-moderation" are not parsed as an id.
+  // Declared before ':id' so "probability", "my", "voting", "moderation" and "admin-moderation" are not parsed as an id.
   @Get('probability')
   @ApiOperation({
     summary: 'Preview the probability that an event takes place',
@@ -143,19 +141,6 @@ export class EventsController {
   @ApiForbiddenResponse({ description: 'Caller is not a pupil' })
   findForVoting(@CurrentUser() actor: User): Promise<VotingEventResponseDto[]> {
     return this.eventsService.findForVoting(actor);
-  }
-
-  @Get('for-rating')
-  @ApiOperation({
-    summary: "Pupil's rating list",
-    description:
-      'Pupil only. Events of any class and scope approved by the teacher: ON_VOTE, ON_ADMIN_MODERATION, FINALIZED, DECLINED_BY_ADMIN. ' +
-      "Newest first, with the caller's own rating (myRating, null if not rated yet).",
-  })
-  @ApiOkResponse({ type: [RatingEventResponseDto] })
-  @ApiForbiddenResponse({ description: 'Caller is not a pupil' })
-  findForRating(@CurrentUser() actor: User): Promise<RatingEventResponseDto[]> {
-    return this.eventsService.findForRating(actor);
   }
 
   @Get('admin-moderation')
@@ -376,25 +361,40 @@ export class EventsController {
     return this.eventsService.vote(actor, id);
   }
 
-  @Put(':id/rating')
+  @Put(':id/like')
   @ApiOperation({
-    summary: 'Rate an event (1 to 5 stars)',
+    summary: 'Like an event (+1)',
     description:
-      'Pupil only, any pupil: the event scope does not limit who rates. ' +
+      'Pupil only, any pupil: the event scope does not limit who likes. ' +
       'The event must be approved by the teacher: ON_VOTE, ON_ADMIN_MODERATION, FINALIZED or DECLINED_BY_ADMIN. ' +
-      'One rating per pupil per event: calling again changes it.',
+      'One like per pupil per event: liking again changes nothing.',
   })
-  @ApiUuidParam('stars is not an integer from 1 to 5')
-  @ApiBody({ type: RateEventDto })
-  @ApiOkResponse({ type: EventRatingResponseDto })
+  @ApiUuidParam()
+  @ApiOkResponse({ type: EventLikeResponseDto })
   @ApiForbiddenResponse({ description: 'Caller is not a pupil' })
   @ApiNotFoundResponse({ description: 'Event not found' })
   @ApiConflictResponse({ description: 'Event is ON_MODERATION, DECLINED or EXPIRED' })
-  rate(
+  like(
     @CurrentUser() actor: User,
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: RateEventDto,
-  ): Promise<EventRatingResponseDto> {
-    return this.eventsService.rate(actor, id, dto.stars);
+  ): Promise<EventLikeResponseDto> {
+    return this.eventsService.like(actor, id);
+  }
+
+  @Delete(':id/like')
+  @ApiOperation({
+    summary: 'Take the like back (-1)',
+    description:
+      'Pupil only, in any status of the event. Does nothing if the caller has not liked it.',
+  })
+  @ApiUuidParam()
+  @ApiOkResponse({ type: EventLikeResponseDto })
+  @ApiForbiddenResponse({ description: 'Caller is not a pupil' })
+  @ApiNotFoundResponse({ description: 'Event not found' })
+  unlike(
+    @CurrentUser() actor: User,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<EventLikeResponseDto> {
+    return this.eventsService.unlike(actor, id);
   }
 }

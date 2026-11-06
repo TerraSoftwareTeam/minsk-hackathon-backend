@@ -2,7 +2,6 @@ import { Event, User } from '../../../prisma/generated/prisma/client';
 import { toUserResponse } from '../auth/user.mapper';
 import { EventResponseDto } from './dto/event-response.dto';
 import { decisionDeadline } from './event-deadlines';
-import { RatingEventResponseDto } from './dto/rating-event-response.dto';
 import { VotingEventResponseDto } from './dto/voting-event-response.dto';
 
 export type EventWithUsers = Event & {
@@ -15,15 +14,13 @@ export type EventWithUsers = Event & {
 /** Values computed for a response, not stored in the event row. */
 export type EventComputed = {
   successProbability: number;
-  rating: EventRatingSummary;
+  likesCount: number;
 };
-
-export type EventRatingSummary = { average: number | null; count: number };
 
 // Explicit field list: never leak extra columns added to the model later.
 export function toEventResponse(
   event: EventWithUsers,
-  { successProbability, rating }: EventComputed,
+  { successProbability, likesCount }: EventComputed,
 ): EventResponseDto {
   return {
     id: event.id,
@@ -38,8 +35,7 @@ export function toEventResponse(
     votingClosesAt: decisionDeadline(event.createdAt),
     successProbability,
     imageUrl: event.image?.url ?? null,
-    ratingAverage: rating.average,
-    ratingsCount: rating.count,
+    likesCount,
     initiator: toUserResponse(event.initiator),
     teacher: event.teacher ? toUserResponse(event.teacher) : null,
     createdAt: event.createdAt,
@@ -47,9 +43,10 @@ export function toEventResponse(
   };
 }
 
-/** Loaded with the caller's own vote (0 or 1 rows) and the total vote count. */
+/** Loaded with the caller's own vote and like (0 or 1 rows each) and the total vote count. */
 export type VotingEvent = EventWithUsers & {
   votes: { voterId: string }[];
+  likes: { userId: string }[];
   _count: { votes: number };
 };
 
@@ -60,17 +57,6 @@ export function toVotingEventResponse(
   return Object.assign(toEventResponse(event, computed), {
     votesCount: event._count.votes,
     hasVoted: event.votes.length > 0,
-  });
-}
-
-/** Loaded with the caller's own rating (0 or 1 rows). */
-export type RatingEvent = EventWithUsers & { ratings: { stars: number }[] };
-
-export function toRatingEventResponse(
-  event: RatingEvent,
-  computed: EventComputed,
-): RatingEventResponseDto {
-  return Object.assign(toEventResponse(event, computed), {
-    myRating: event.ratings[0]?.stars ?? null,
+    likedByMe: event.likes.length > 0,
   });
 }

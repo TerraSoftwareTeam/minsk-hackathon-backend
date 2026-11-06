@@ -9,7 +9,7 @@ model User {
   initiatedEvents Event[]       @relation("EventInitiator")
   teacherEvents   Event[]       @relation("EventTeacher")
   eventVotes      EventVote[]
-  eventRatings    EventRating[]
+  eventLikes      EventLike[]
   uploadedImages  Image[]       @relation("UploadedImages")
   deviceTokens    DeviceToken[]
 }
