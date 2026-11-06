@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  ConflictException,
   ForbiddenException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -32,9 +31,15 @@ const dto: RegisterDto = {
 describe('AuthService.register', () => {
   let service: AuthService;
   let prisma: {
-    user: { create: jest.Mock; findFirst: jest.Mock };
+    user: { create: jest.Mock; findFirst: jest.Mock; findUnique: jest.Mock };
   };
   let jwt: { signAsync: jest.Mock };
+
+  const p2002 = () =>
+    new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+      code: 'P2002',
+      clientVersion: 'test',
+    });
 
   beforeEach(() => {
     prisma = {
@@ -42,6 +47,8 @@ describe('AuthService.register', () => {
         create: jest.fn(),
         // By default the pupil's class has a teacher.
         findFirst: jest.fn().mockResolvedValue({ id: 't1' }),
+        // By default schoolsById is new.
+        findUnique: jest.fn().mockResolvedValue(null),
       },
     };
     jwt = { signAsync: jest.fn().mockResolvedValue('signed.jwt.token') };
@@ -51,74 +58,131 @@ describe('AuthService.register', () => {
     );
   });
 
-  it('creates the user and returns the JWT together with the user', async () => {
-    prisma.user.create.mockResolvedValue(storedUser);
+  describe('existing schoolsById: logs in', () => {
+    it('returns the stored user and ignores the other fields', async () => {
+      prisma.user.findUnique.mockResolvedValue(storedUser);
 
-    const result = await service.register(dto);
+      const result = await service.register({
+        ...dto,
+        name: 'Other',
+        role: UserRoles.TEACHER,
+        class: '11B',
+      });
 
-    expect(prisma.user.create).toHaveBeenCalledWith({
-      data: dto,
-    });
-    expect(jwt.signAsync).toHaveBeenCalledWith({ sub: 'u1', role: UserRoles.PUPIL });
-    expect(result).toEqual({ accessToken: 'signed.jwt.token', user: expectedUser });
-  });
-
-  it('pupil: checks that the class has a teacher', async () => {
-    prisma.user.create.mockResolvedValue(storedUser);
-
-    await service.register(dto);
-
-    expect(prisma.user.findFirst).toHaveBeenCalledWith({
-      where: { role: UserRoles.TEACHER, class: '10A' },
-      select: { id: true },
-    });
-  });
-
-  it('pupil: BadRequest and no user created when the class has no teacher', async () => {
-    prisma.user.findFirst.mockResolvedValue(null);
-
-    await expect(service.register(dto)).rejects.toBeInstanceOf(BadRequestException);
-    expect(prisma.user.create).not.toHaveBeenCalled();
-    expect(jwt.signAsync).not.toHaveBeenCalled();
-  });
-
-  it('teacher: registers without a teacher check (the first teacher opens the class)', async () => {
-    const teacherDto: RegisterDto = {
-      schoolsById: 'school-user-2',
-      name: 'Maria',
-      surname: 'Sidorova',
-      role: UserRoles.TEACHER,
-      class: '10A',
-    };
-    prisma.user.create.mockResolvedValue({ ...storedUser, role: UserRoles.TEACHER });
-
-    await service.register(teacherDto);
-
-    expect(prisma.user.findFirst).not.toHaveBeenCalled();
-    expect(prisma.user.create).toHaveBeenCalledWith({ data: teacherDto });
-  });
-
-  it.each([UserRoles.PUPIL, UserRoles.TEACHER])(
-    '%s: BadRequest without a class, no user created',
-    async (role) => {
-      const noClass: RegisterDto = Object.assign(new RegisterDto(), dto, { role, class: '  ' });
-      await expect(service.register(noClass)).rejects.toBeInstanceOf(
-        BadRequestException,
-      );
+      expect(prisma.user.findUnique).toHaveBeenCalledWith({
+        where: { schoolsById: 'school-user-1' },
+      });
       expect(prisma.user.create).not.toHaveBeenCalled();
-    },
-  );
+      expect(prisma.user.findFirst).not.toHaveBeenCalled();
+      expect(jwt.signAsync).toHaveBeenCalledWith({ sub: 'u1', role: UserRoles.PUPIL });
+      expect(result).toEqual({ accessToken: 'signed.jwt.token', user: expectedUser });
+    });
 
-  it('throws Conflict when schoolsById is already taken', async () => {
-    prisma.user.create.mockRejectedValue(
-      new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
-        code: 'P2002',
-        clientVersion: 'test',
-      }),
+    it('works with schoolsById only', async () => {
+      prisma.user.findUnique.mockResolvedValue(storedUser);
+
+      const result = await service.register({ schoolsById: 'school-user-1' });
+
+      expect(result.user).toEqual(expectedUser);
+    });
+
+    it('Forbidden when the stored pupil/teacher has no class, no token issued', async () => {
+      prisma.user.findUnique.mockResolvedValue({ ...storedUser, class: null });
+
+      await expect(service.register(dto)).rejects.toBeInstanceOf(ForbiddenException);
+      expect(jwt.signAsync).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('new schoolsById: registers', () => {
+    it('creates the user and returns the JWT together with the user', async () => {
+      prisma.user.create.mockResolvedValue(storedUser);
+
+      const result = await service.register(dto);
+
+      expect(prisma.user.create).toHaveBeenCalledWith({ data: dto });
+      expect(jwt.signAsync).toHaveBeenCalledWith({ sub: 'u1', role: UserRoles.PUPIL });
+      expect(result).toEqual({ accessToken: 'signed.jwt.token', user: expectedUser });
+    });
+
+    it('pupil: checks that the class has a teacher', async () => {
+      prisma.user.create.mockResolvedValue(storedUser);
+
+      await service.register(dto);
+
+      expect(prisma.user.findFirst).toHaveBeenCalledWith({
+        where: { role: UserRoles.TEACHER, class: '10A' },
+        select: { id: true },
+      });
+    });
+
+    it('pupil: BadRequest and no user created when the class has no teacher', async () => {
+      prisma.user.findFirst.mockResolvedValue(null);
+
+      await expect(service.register(dto)).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.user.create).not.toHaveBeenCalled();
+      expect(jwt.signAsync).not.toHaveBeenCalled();
+    });
+
+    it('teacher: registers without a teacher check (the first teacher opens the class)', async () => {
+      const teacherDto: RegisterDto = {
+        schoolsById: 'school-user-2',
+        name: 'Maria',
+        surname: 'Sidorova',
+        role: UserRoles.TEACHER,
+        class: '10A',
+      };
+      prisma.user.create.mockResolvedValue({ ...storedUser, role: UserRoles.TEACHER });
+
+      await service.register(teacherDto);
+
+      expect(prisma.user.findFirst).not.toHaveBeenCalled();
+      expect(prisma.user.create).toHaveBeenCalledWith({ data: teacherDto });
+    });
+
+    it.each(['name', 'surname', 'role', 'class'] as const)(
+      'BadRequest without %s, no user created',
+      async (field) => {
+        const partial: RegisterDto = { ...dto, [field]: undefined };
+
+        await expect(service.register(partial)).rejects.toBeInstanceOf(BadRequestException);
+        expect(prisma.user.create).not.toHaveBeenCalled();
+      },
     );
 
-    await expect(service.register(dto)).rejects.toBeInstanceOf(ConflictException);
-    expect(jwt.signAsync).not.toHaveBeenCalled();
+    it.each([UserRoles.PUPIL, UserRoles.TEACHER])(
+      '%s: BadRequest with a blank class, no user created',
+      async (role) => {
+        await expect(
+          service.register({ ...dto, role, class: '  ' }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(prisma.user.create).not.toHaveBeenCalled();
+      },
+    );
+
+    it('BadRequest for role ADMIN, no user created', async () => {
+      await expect(
+        service.register({ ...dto, role: UserRoles.ADMIN }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.user.create).not.toHaveBeenCalled();
+    });
+
+    it('a concurrent request took the schoolsById first: logs in as that user', async () => {
+      prisma.user.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(storedUser);
+      prisma.user.create.mockRejectedValue(p2002());
+
+      const result = await service.register(dto);
+
+      expect(result).toEqual({ accessToken: 'signed.jwt.token', user: expectedUser });
+    });
+
+    it('rethrows a unique-constraint error when the user still cannot be found', async () => {
+      const error = p2002();
+      prisma.user.create.mockRejectedValue(error);
+
+      await expect(service.register(dto)).rejects.toBe(error);
+      expect(jwt.signAsync).not.toHaveBeenCalled();
+    });
   });
 });
 

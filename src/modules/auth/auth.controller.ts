@@ -2,7 +2,6 @@ import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiBody,
-  ApiConflictResponse,
   ApiCreatedResponse,
   ApiForbiddenResponse,
   ApiOkResponse,
@@ -25,15 +24,21 @@ export class AuthController {
 
   @Post('register')
   @ApiOperation({
-    summary: 'Register a new user',
+    summary: 'Register or log in (PUPIL / TEACHER)',
     description:
-      'Creates a user and returns a JWT access token. Public endpoint, no auth required.',
+      'If a user with this schoolsById exists, logs them in and ignores the other fields. ' +
+      'Otherwise creates a new user from name, surname, role and class (all required then). ' +
+      'Returns a JWT access token either way. Public endpoint, no auth required.',
   })
   @ApiBody({
     type: RegisterDto,
     examples: {
+      existing: {
+        summary: 'Existing user (log in)',
+        value: { schoolsById: 'school-user-123' },
+      },
       pupil: {
-        summary: 'Pupil',
+        summary: 'New pupil',
         value: {
           schoolsById: 'school-user-123',
           name: 'Ivan',
@@ -43,7 +48,7 @@ export class AuthController {
         },
       },
       teacher: {
-        summary: 'Teacher',
+        summary: 'New teacher',
         value: {
           schoolsById: 'school-user-456',
           name: 'Maria',
@@ -55,14 +60,14 @@ export class AuthController {
     },
   })
   @ApiCreatedResponse({
-    description: 'User created; JWT and user returned',
+    description: 'User logged in or created; JWT and user returned',
     type: AuthResponseDto,
   })
   @ApiBadRequestResponse({
     description:
-      'Validation failed (missing/invalid fields, blank class, unknown fields), or a PUPIL registers into a class that has no teacher',
+      'Validation failed (invalid fields, blank class, unknown fields), a new user is missing name/surname/role/class, or a new PUPIL registers into a class that has no teacher',
   })
-  @ApiConflictResponse({ description: 'User with this schoolsById already exists' })
+  @ApiForbiddenResponse({ description: 'Existing PUPIL or TEACHER has no class assigned' })
   register(@Body() dto: RegisterDto): Promise<AuthResponseDto> {
     return this.authService.register(dto);
   }

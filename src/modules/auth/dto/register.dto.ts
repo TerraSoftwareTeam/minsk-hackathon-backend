@@ -4,6 +4,7 @@ import {
   IsEnum,
   IsIn,
   IsNotEmpty,
+  IsOptional,
   IsString,
   IsUUID,
   ValidateIf,
@@ -16,6 +17,11 @@ import { UserResponseDto } from './user-response.dto';
 // Admins are not created through the API.
 const SELF_REGISTRABLE_ROLES = [UserRoles.PUPIL, UserRoles.TEACHER] as const;
 
+/**
+ * Register-or-login by schoolsById. If a user with this schoolsById exists, they are
+ * logged in and the other fields are ignored; otherwise name, surname, role and class
+ * are required and a new user is created.
+ */
 export class RegisterDto {
   @ApiProperty({
     example: 'school-user-123',
@@ -25,32 +31,37 @@ export class RegisterDto {
   @IsNotEmpty()
   schoolsById!: string;
 
-  @ApiProperty({ example: 'Ivan', description: 'First name' })
+  @ApiPropertyOptional({ example: 'Ivan', description: 'First name. Required for a new user' })
+  @IsOptional()
   @IsString()
   @IsNotEmpty()
-  name!: string;
+  name?: string;
 
-  @ApiProperty({ example: 'Ivanov', description: 'Last name' })
+  @ApiPropertyOptional({ example: 'Ivanov', description: 'Last name. Required for a new user' })
+  @IsOptional()
   @IsString()
   @IsNotEmpty()
-  surname!: string;
+  surname?: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     enum: SELF_REGISTRABLE_ROLES,
     example: UserRoles.PUPIL,
-    description: 'User role (PUPIL or TEACHER)',
+    description: 'User role (PUPIL or TEACHER). Required for a new user',
   })
+  @IsOptional()
   @IsIn(SELF_REGISTRABLE_ROLES)
-  role!: UserRoles;
+  role?: UserRoles;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     example: '10A',
-    description: 'Class name; surrounding spaces are trimmed, must not be blank',
+    description:
+      'Class name; surrounding spaces are trimmed, must not be blank. Required for a new user',
   })
+  @IsOptional()
   @Transform(trimString)
   @IsString()
   @IsNotEmpty()
-  class!: string;
+  class?: string;
 }
 
 /**

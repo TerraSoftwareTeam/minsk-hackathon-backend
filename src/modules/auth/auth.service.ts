@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  ConflictException,
   ForbiddenException,
   Injectable,
   UnauthorizedException,
@@ -19,38 +18,66 @@ export class AuthService {
     private readonly jwtService: JwtService,
   ) {}
 
+  /**
+   * Single entry point for PUPIL/TEACHER: register or log in by schoolsById.
+   * - schoolsById already exists: log that user in, all other fields are ignored.
+   * - schoolsById is new: create the user from name, surname, role and class.
+   */
   async register(dto: RegisterDto): Promise<AuthResponseDto> {
-    // The DTO already requires it; checked again so the service is safe on its own.
-    if (!hasRequiredClass(dto)) {
-      throw new BadRequestException(`class is required for ${dto.role}`);
-    }
-    if (dto.role === UserRoles.PUPIL) {
-      await this.assertClassHasTeacher(dto.class);
+    const existing = await this.prisma.user.findUnique({
+      where: { schoolsById: dto.schoolsById },
+    });
+    if (existing) {
+      return this.logInExisting(existing);
     }
 
-    let user;
+    const data = this.newUserData(dto);
+    if (data.role === UserRoles.PUPIL) {
+      await this.assertClassHasTeacher(data.class);
+    }
+
     try {
-      user = await this.prisma.user.create({
-        data: {
-          schoolsById: dto.schoolsById,
-          name: dto.name,
-          surname: dto.surname,
-          role: dto.role,
-          class: dto.class,
-        },
-      });
+      const user = await this.prisma.user.create({ data });
+      return this.buildAuthResponse(user);
     } catch (error) {
+      // A concurrent request created the same schoolsById first: log in as that user.
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2002'
       ) {
-        throw new ConflictException(
-          'User with this schoolsById already exists',
-        );
+        const raced = await this.prisma.user.findUnique({
+          where: { schoolsById: dto.schoolsById },
+        });
+        if (raced) {
+          return this.logInExisting(raced);
+        }
       }
       throw error;
     }
+  }
 
+  /** Fields needed to create a user; they are optional in the DTO because a login does not need them. */
+  private newUserData(dto: RegisterDto) {
+    const missing = (['name', 'surname', 'role', 'class'] as const).filter(
+      (field) => !dto[field]?.trim(),
+    );
+    if (missing.length) {
+      throw new BadRequestException(
+        `No user with this schoolsById; to register, provide: ${missing.join(', ')}`,
+      );
+    }
+    const { schoolsById, name, surname, role, class: className } = dto as Required<RegisterDto>;
+    // The DTO allows only PUPIL/TEACHER; checked again so the service is safe on its own.
+    if (role === UserRoles.ADMIN) {
+      throw new BadRequestException('ADMIN cannot register');
+    }
+    return { schoolsById, name, surname, role, class: className };
+  }
+
+  private logInExisting(user: User): Promise<AuthResponseDto> {
+    if (!hasRequiredClass(user)) {
+      throw new ForbiddenException(`${user.role} has no class assigned, contact an admin`);
+    }
     return this.buildAuthResponse(user);
   }
 
@@ -74,11 +101,7 @@ export class AuthService {
     if (!user) {
       throw new UnauthorizedException('Invalid credentials');
     }
-    if (!hasRequiredClass(user)) {
-      throw new ForbiddenException(`${user.role} has no class assigned, contact an admin`);
-    }
-
-    return this.buildAuthResponse(user);
+    return this.logInExisting(user);
   }
 
   /**
