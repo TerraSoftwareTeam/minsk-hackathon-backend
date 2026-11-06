@@ -1,13 +1,14 @@
 import { Event, User } from '../../../prisma/generated/prisma/client';
 import { toUserResponse } from '../auth/user.mapper';
 import { EventResponseDto } from './dto/event-response.dto';
-import { votingClosesAt } from './event-deadlines';
+import { decisionDeadline } from './event-deadlines';
 import { RatingEventResponseDto } from './dto/rating-event-response.dto';
 import { VotingEventResponseDto } from './dto/voting-event-response.dto';
 
 export type EventWithUsers = Event & {
   initiator: User;
-  teacher: User;
+  /** Null while the initiator's class has no teacher. */
+  teacher: User | null;
   image: { url: string } | null;
 };
 
@@ -34,13 +35,13 @@ export function toEventResponse(
     declineReason: event.declineReason,
     voteThreshold: event.voteThreshold,
     startsAt: event.startsAt,
-    votingClosesAt: votingClosesAt(event.startsAt),
+    votingClosesAt: decisionDeadline(event.createdAt),
     successProbability,
     imageUrl: event.image?.url ?? null,
     ratingAverage: rating.average,
     ratingsCount: rating.count,
     initiator: toUserResponse(event.initiator),
-    teacher: toUserResponse(event.teacher),
+    teacher: event.teacher ? toUserResponse(event.teacher) : null,
     createdAt: event.createdAt,
     updatedAt: event.updatedAt,
   };

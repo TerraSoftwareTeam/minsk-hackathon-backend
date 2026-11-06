@@ -2,36 +2,41 @@ import { EventStatuses } from '../../../prisma/generated/prisma/client';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Voting (and teacher moderation before it) closes this long before the event starts. */
-export const VOTING_CLOSES_BEFORE_START_MS = 2 * DAY_MS;
-
 /**
- * How long before startsAt an event in each pending status expires.
- * Collecting votes ends at the voting deadline; an event that passed the vote
- * keeps the remaining time until the start for the admin decision.
- * Statuses not listed here are final and never expire.
+ * A pending event must be decided within this time after it was created:
+ * teacher moderation, voting and the admin decision all close at
+ * createdAt + DECISION_WINDOW_MS. A month is counted as 30 days, so the
+ * deadline is a plain offset and the queries can compare createdAt directly.
  */
-export const EXPIRES_BEFORE_START_MS = {
-  [EventStatuses.ON_MODERATION]: VOTING_CLOSES_BEFORE_START_MS,
-  [EventStatuses.ON_VOTE]: VOTING_CLOSES_BEFORE_START_MS,
-  [EventStatuses.ON_ADMIN_MODERATION]: 0,
-} as const;
+export const DECISION_WINDOW_MS = 30 * DAY_MS;
 
-export type PendingStatus = keyof typeof EXPIRES_BEFORE_START_MS;
+/** Statuses that still await a decision and expire at the deadline. The rest are final. */
+export const PENDING_STATUSES = [
+  EventStatuses.ON_MODERATION,
+  EventStatuses.ON_VOTE,
+  EventStatuses.ON_ADMIN_MODERATION,
+] as const;
 
-export function votingClosesAt(startsAt: Date): Date {
-  return new Date(startsAt.getTime() - VOTING_CLOSES_BEFORE_START_MS);
+export type PendingStatus = (typeof PENDING_STATUSES)[number];
+
+export function isPending(status: EventStatuses): status is PendingStatus {
+  return (PENDING_STATUSES as readonly EventStatuses[]).includes(status);
+}
+
+/** When voting (and every other pending step) closes for an event created at `createdAt`. */
+export function decisionDeadline(createdAt: Date): Date {
+  return new Date(createdAt.getTime() + DECISION_WINDOW_MS);
 }
 
 /**
- * Events with startsAt at or before this moment are past a deadline that is
- * `leadMs` before the start: startsAt - leadMs <= now  <=>  startsAt <= now + leadMs.
- * Comparing startsAt directly keeps the queries on the (status, startsAt) index.
+ * Events created at or before this moment are past their deadline:
+ * createdAt + window <= now  <=>  createdAt <= now - window.
+ * Comparing createdAt directly keeps the queries on the (status, createdAt) index.
  */
-export function deadlineCutoff(leadMs: number, now: Date = new Date()): Date {
-  return new Date(now.getTime() + leadMs);
+export function deadlineCutoff(now: Date = new Date()): Date {
+  return new Date(now.getTime() - DECISION_WINDOW_MS);
 }
 
-export function isPastDeadline(startsAt: Date, leadMs: number, now: Date = new Date()): boolean {
-  return startsAt.getTime() <= deadlineCutoff(leadMs, now).getTime();
+export function isPastDeadline(createdAt: Date, now: Date = new Date()): boolean {
+  return createdAt.getTime() <= deadlineCutoff(now).getTime();
 }

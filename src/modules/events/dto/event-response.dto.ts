@@ -50,13 +50,19 @@ export class EventResponseDto {
   })
   voteThreshold!: number;
 
-  @ApiProperty({ example: '2026-12-01T07:00:00.000Z', description: 'When the event starts (UTC)' })
-  startsAt!: Date;
+  @ApiProperty({
+    example: null,
+    nullable: true,
+    type: Date,
+    description:
+      'When the event starts (UTC). Set by the admin on approval: null in every status except FINALIZED',
+  })
+  startsAt!: Date | null;
 
   @ApiProperty({
-    example: '2026-11-29T07:00:00.000Z',
+    example: '2026-12-06T10:00:00.000Z',
     description:
-      'Computed: 2 days before startsAt. Voting and teacher moderation must finish by then, otherwise the event becomes EXPIRED',
+      'Computed: createdAt + 1 month (30 days). Teacher moderation, voting and the admin decision must finish by then, otherwise the event becomes EXPIRED',
   })
   votingClosesAt!: Date;
 
@@ -65,9 +71,9 @@ export class EventResponseDto {
     minimum: 0,
     maximum: 1,
     description:
-      'Computed: probability (0..1) that the event takes place, from other events of the same category with a known outcome (also not yet started ones): ' +
-      'how close their start time of day (Minsk time) is and whether they were FINALIZED or EXPIRED. ' +
-      'Declined and pending events are not counted. 0.9 when at least 5 such events all started at the same time and all took place; 0.5 without history',
+      'Computed: probability (0..1) that the event takes place, from other FINALIZED events of the same category (also not yet started ones), ' +
+      'the only ones with a date. For a FINALIZED event, weighted by how close their start time of day (Minsk time) is; ' +
+      'before the date is set, the time is not compared. 0.9 with at least 5 such events (at the same time); 0.5 without history',
   })
   successProbability!: number;
 
@@ -99,8 +105,13 @@ export class EventResponseDto {
   @ApiProperty({ type: UserResponseDto, description: 'Pupil who created the event' })
   initiator!: UserResponseDto;
 
-  @ApiProperty({ type: UserResponseDto, description: 'Teacher who moderates the event' })
-  teacher!: UserResponseDto;
+  @ApiProperty({
+    type: UserResponseDto,
+    nullable: true,
+    description:
+      "Teacher who moderates the event. Null while the author's class has no teacher: the first teacher who registers into the class gets the event",
+  })
+  teacher!: UserResponseDto | null;
 
   @ApiProperty({ example: '2026-11-06T10:00:00.000Z', description: 'When the request was created (UTC)' })
   createdAt!: Date;

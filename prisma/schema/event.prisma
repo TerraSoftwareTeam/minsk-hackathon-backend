@@ -11,14 +11,17 @@ model Event {
   /// Votes needed to move the event from ON_VOTE to ON_ADMIN_MODERATION. Always >= 1.
   voteThreshold Int
 
-  /// When the event takes place. Pending deadlines are derived from it (event-deadlines.ts).
-  startsAt DateTime
+  /// When the event takes place. Set only by the admin who approves the event
+  /// (FINALIZED); null before that and in every other status. Never changed after.
+  startsAt DateTime?
 
   initiator   User   @relation("EventInitiator", fields: [initiatorId], references: [id])
   initiatorId String
 
-  teacher   User   @relation("EventTeacher", fields: [teacherId], references: [id])
-  teacherId String
+  /// Teacher of the initiator's class who moderates the event. Null while the
+  /// class has no teacher: the first teacher who registers into it gets the event.
+  teacher   User?   @relation("EventTeacher", fields: [teacherId], references: [id], onDelete: Restrict)
+  teacherId String?
 
   votes   EventVote[]
   ratings EventRating[]
@@ -27,10 +30,11 @@ model Event {
   image   Image?  @relation("EventImage", fields: [imageId], references: [id], onDelete: SetNull)
   imageId String? @unique
 
+  /// Pending deadlines are derived from it: createdAt + 1 month (event-deadlines.ts).
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([initiatorId])
   @@index([teacherId, status])
-  @@index([status, startsAt])
+  @@index([status, createdAt])
 }

@@ -21,19 +21,21 @@ import { DeclineEventDto } from './dto/decline-event.dto';
 import { EventResponseDto } from './dto/event-response.dto';
 import { EventVoteResponseDto } from './dto/event-vote-response.dto';
 import { VotingEventResponseDto } from './dto/voting-event-response.dto';
+import { AdminApproveEventDto } from './dto/admin-approve-event.dto';
 import {
-  EXPIRES_BEFORE_START_MS,
+  PENDING_STATUSES,
   PendingStatus,
-  VOTING_CLOSES_BEFORE_START_MS,
   deadlineCutoff,
   isPastDeadline,
+  isPending,
 } from './event-deadlines';
 import {
-  OUTCOME_STATUSES,
+  OUTCOME_STATUS,
   ProbabilityHistoryEvent,
   computeSuccessProbability,
 } from './event-probability';
 import { DecisionStatus, EventModerationNotifier } from './event-moderation.notifier';
+import { assignEventsWithoutTeacher } from './teacher-assignment';
 import { EventRatingResponseDto } from './dto/event-rating-response.dto';
 import { RatingEventResponseDto } from './dto/rating-event-response.dto';
 import {
@@ -69,7 +71,7 @@ const withVoteState = (voterId: string) =>
 
 /**
  * A moderation step: which status it decides on and who may decide. Its
- * deadline is the expiration deadline of that status (EXPIRES_BEFORE_START_MS).
+ * deadline is the decision deadline of the event (createdAt + 1 month).
  */
 type ModerationStage = {
   from: PendingStatus;
@@ -82,20 +84,23 @@ const TEACHER_MODERATION: ModerationStage = {
   from: EventStatuses.ON_MODERATION,
   mayModerate: (actor, event) => actor.id === event.teacherId,
   forbiddenMessage: 'Only the assigned teacher can moderate this event',
-  lateMessage: 'Too late to moderate: voting for this event closed 2 days before its start',
+  lateMessage: 'Too late to moderate: the event was not decided within a month of its creation',
 };
 
 const ADMIN_MODERATION: ModerationStage = {
   from: EventStatuses.ON_ADMIN_MODERATION,
   mayModerate: (actor) => actor.role === UserRoles.ADMIN,
   forbiddenMessage: 'Only an admin can moderate this event',
-  lateMessage: 'Too late to moderate: the event has already started',
+  lateMessage: 'Too late to moderate: the event was not decided within a month of its creation',
 };
 
 /**
  * Event moderation flow:
  * 1. A PUPIL creates an event. It gets status ON_MODERATION and is assigned
  *    to a teacher of the pupil's class (teacher.class === pupil.class).
+ *    If the class has no teacher yet, the event waits ON_MODERATION without
+ *    one; the first teacher who registers into the class gets all such events
+ *    (teacher-assignment.ts). Its deadline still runs from createdAt.
  * 2. That teacher sees it in their moderation list and either approves it
  *    (ON_VOTE) or declines it (DECLINED, optional reason).
  * 3. While the event is ON_VOTE, pupils vote for it (one vote per pupil).
@@ -104,14 +109,15 @@ const ADMIN_MODERATION: ModerationStage = {
  *    SCHOOL - any pupil.
  * 4. When the votes reach the event's voteThreshold (set by the initiator),
  *    the event moves to ON_ADMIN_MODERATION and voting closes.
- * 5. Any admin approves it (FINALIZED) or declines it (DECLINED_BY_ADMIN,
- *    optional reason).
+ * 5. Any admin approves it (FINALIZED), setting the date (startsAt, in the
+ *    future), or declines it (DECLINED_BY_ADMIN, optional reason).
  *
- * Deadlines (see event-deadlines.ts). The pupil sets only startsAt; voting
- * closes 2 days before it (votingClosesAt).
- * - ON_MODERATION and ON_VOTE expire at the voting deadline: the event did not
- *   get approved and collect its votes in time.
- * - ON_ADMIN_MODERATION expires at startsAt: the admin uses the time left.
+ * Date: an event has no startsAt until an admin approves it; nobody can set or
+ * change it before or after that.
+ *
+ * Deadline (see event-deadlines.ts): every pending status (ON_MODERATION,
+ * ON_VOTE, ON_ADMIN_MODERATION) expires at createdAt + 1 month (votingClosesAt):
+ * the event was not approved, voted and decided by the admin in time.
  * Expired events become EXPIRED (expireOverdue, run every minute by
  * EventsScheduler). Past its deadline no vote or decision is accepted, even
  * before the scheduler runs, and the queues and the voting feed hide the event.
@@ -149,16 +155,9 @@ export class EventsService {
     if (!actor.class) {
       throw new BadRequestException('Pupil has no class assigned');
     }
-    const startsAt = new Date(dto.startsAt);
-    // Otherwise the event would expire right away, before anyone could vote.
-    if (isPastDeadline(startsAt, VOTING_CLOSES_BEFORE_START_MS)) {
-      throw new BadRequestException(
-        'startsAt must be more than 2 days ahead: voting closes 2 days before the event',
-      );
-    }
     const teacher = await this.findClassTeacher(actor.class);
 
-    const event = await this.withPrismaErrors(() =>
+    let event = await this.withPrismaErrors(() =>
       this.prisma.event.create({
         data: {
           name: dto.name,
@@ -166,23 +165,34 @@ export class EventsService {
           scope: dto.scope,
           category: dto.category,
           voteThreshold: dto.voteThreshold,
-          startsAt,
           status: EventStatuses.ON_MODERATION,
           initiatorId: actor.id,
-          teacherId: teacher.id,
+          teacherId: teacher?.id ?? null,
         },
         include: WITH_USERS,
       }),
     );
-    this.notifier.awaitsTeacher(event);
+    if (!teacher) {
+      // A teacher who registered between the lookup and the insert did not see
+      // this event when taking the class's events: look again now it is committed.
+      const lateTeacher = await this.findClassTeacher(actor.class);
+      if (lateTeacher) {
+        await assignEventsWithoutTeacher(this.prisma, lateTeacher.id, actor.class);
+        event = await this.findEventOrThrow(event.id);
+      }
+    }
+    if (event.teacherId) {
+      this.notifier.awaitsTeacher({ ...event, teacherId: event.teacherId });
+    }
     return this.toResponse(event);
   }
 
   /**
-   * Preview for the creation form: the probability that an event of this
-   * category starting at this time takes place (see event-probability.ts).
+   * Preview: the probability that an event of this category takes place, at
+   * this start time if given (e.g. for the admin choosing the date), otherwise
+   * whatever the time (see event-probability.ts).
    */
-  async previewProbability(category: EventCategories, startsAt: Date): Promise<number> {
+  async previewProbability(category: EventCategories, startsAt: Date | null): Promise<number> {
     const history = await this.loadHistory([{ category }]);
     return computeSuccessProbability(category, startsAt, history);
   }
@@ -196,7 +206,7 @@ export class EventsService {
       where: {
         teacherId: actor.id,
         status: EventStatuses.ON_MODERATION,
-        startsAt: { gt: deadlineCutoff(EXPIRES_BEFORE_START_MS.ON_MODERATION) },
+        createdAt: { gt: deadlineCutoff() },
       },
       include: WITH_USERS,
       orderBy: { createdAt: 'asc' },
@@ -233,7 +243,7 @@ export class EventsService {
       where: {
         status: EventStatuses.ON_VOTE,
         // Voting still open: an overdue event may wait up to a minute for expiration.
-        startsAt: { gt: deadlineCutoff(EXPIRES_BEFORE_START_MS.ON_VOTE) },
+        createdAt: { gt: deadlineCutoff() },
         OR: [
           { scope: Scopes.SCHOOL },
           { scope: Scopes.GRADE },
@@ -273,7 +283,7 @@ export class EventsService {
     const events = await this.prisma.event.findMany({
       where: {
         status: EventStatuses.ON_ADMIN_MODERATION,
-        startsAt: { gt: deadlineCutoff(EXPIRES_BEFORE_START_MS.ON_ADMIN_MODERATION) },
+        createdAt: { gt: deadlineCutoff() },
       },
       include: WITH_USERS,
       orderBy: { createdAt: 'asc' },
@@ -302,9 +312,15 @@ export class EventsService {
     });
   }
 
-  adminApprove(actor: User, id: string): Promise<EventResponseDto> {
+  /** The admin approves the event and sets its date, which must be in the future. */
+  async adminApprove(actor: User, id: string, dto: AdminApproveEventDto): Promise<EventResponseDto> {
+    const startsAt = new Date(dto.startsAt);
+    if (startsAt.getTime() <= Date.now()) {
+      throw new BadRequestException('startsAt must be in the future');
+    }
     return this.moderate(ADMIN_MODERATION, actor, id, {
       status: EventStatuses.FINALIZED,
+      startsAt,
     });
   }
 
@@ -325,7 +341,7 @@ export class EventsService {
       select: {
         status: true,
         scope: true,
-        startsAt: true,
+        createdAt: true,
         initiator: { select: { class: true } },
       },
     });
@@ -456,10 +472,8 @@ export class EventsService {
   async expireOverdue(now: Date = new Date()): Promise<number> {
     const { count } = await this.prisma.event.updateMany({
       where: {
-        OR: Object.entries(EXPIRES_BEFORE_START_MS).map(([status, leadMs]) => ({
-          status: status as PendingStatus,
-          startsAt: { lte: deadlineCutoff(leadMs, now) },
-        })),
+        status: { in: [...PENDING_STATUSES] },
+        createdAt: { lte: deadlineCutoff(now) },
       },
       data: { status: EventStatuses.EXPIRED },
     });
@@ -518,39 +532,26 @@ export class EventsService {
   }
 
   /**
-   * Events with a known outcome in the categories of `targets`. Declined and pending events have no outcome to learn from.
+   * FINALIZED events (they have the date set by the admin) in the categories of
+   * `targets`: the only ones the probability learns from.
    * Loaded on every request, so the probability always reflects the current state.
-   * A pending event past its deadline counts as EXPIRED right away, without
-   * waiting up to a minute for expireOverdue to change its status.
    */
   private async loadHistory(
     targets: { category: EventCategories }[],
   ): Promise<ProbabilityHistoryEvent[]> {
-    const now = new Date();
-    const events = await this.prisma.event.findMany({
+    return this.prisma.event.findMany({
       where: {
         category: { in: [...new Set(targets.map((target) => target.category))] },
-        OR: [
-          { status: { in: [...OUTCOME_STATUSES] } },
-          ...Object.entries(EXPIRES_BEFORE_START_MS).map(([status, leadMs]) => ({
-            status: status as PendingStatus,
-            startsAt: { lte: deadlineCutoff(leadMs, now) },
-          })),
-        ],
+        status: OUTCOME_STATUS,
+        startsAt: { not: null },
       },
       select: { id: true, category: true, startsAt: true, status: true },
     });
-    return events.map((event) =>
-      event.status in EXPIRES_BEFORE_START_MS
-        ? { ...event, status: EventStatuses.EXPIRED }
-        : event,
-    );
   }
 
-  /** The image can change while the event is pending and not past the deadline of its status. */
-  private assertImageEditable(event: { status: EventStatuses; startsAt: Date }): void {
-    const isPending = event.status in EXPIRES_BEFORE_START_MS;
-    if (!isPending || isPastDeadline(event.startsAt, EXPIRES_BEFORE_START_MS[event.status as PendingStatus])) {
+  /** The image can change while the event is pending and not past its deadline. */
+  private assertImageEditable(event: { status: EventStatuses; createdAt: Date }): void {
+    if (!isPending(event.status) || isPastDeadline(event.createdAt)) {
       throw new ConflictException(
         `The image can be changed only until the event is decided, its status is ${event.status}`,
       );
@@ -561,10 +562,10 @@ export class EventsService {
   private async lockForImage(
     tx: Prisma.TransactionClient,
     id: string,
-  ): Promise<{ status: EventStatuses; startsAt: Date; imageId: string | null }> {
+  ): Promise<{ status: EventStatuses; createdAt: Date; imageId: string | null }> {
     const [locked] = await tx.$queryRaw<
-      { status: EventStatuses; startsAt: Date; imageId: string | null }[]
-    >`SELECT "status", "startsAt", "imageId" FROM "Event" WHERE "id" = ${id} FOR UPDATE`;
+      { status: EventStatuses; createdAt: Date; imageId: string | null }[]
+    >`SELECT "status", "createdAt", "imageId" FROM "Event" WHERE "id" = ${id} FOR UPDATE`;
     if (!locked) {
       throw new NotFoundException('Event not found');
     }
@@ -584,12 +585,12 @@ export class EventsService {
   }
 
   /** Votes are accepted only while the event is ON_VOTE and before the voting deadline. */
-  private assertVotingOpen(event: { status: EventStatuses; startsAt: Date }): void {
+  private assertVotingOpen(event: { status: EventStatuses; createdAt: Date }): void {
     if (event.status !== EventStatuses.ON_VOTE) {
       throw new ConflictException(`Event is not on vote, its status is ${event.status}`);
     }
-    if (isPastDeadline(event.startsAt, EXPIRES_BEFORE_START_MS.ON_VOTE)) {
-      throw new ConflictException('Voting is closed: it closes 2 days before the event starts');
+    if (isPastDeadline(event.createdAt)) {
+      throw new ConflictException('Voting is closed: it closes a month after the event was created');
     }
   }
 
@@ -604,9 +605,9 @@ export class EventsService {
     voterId: string,
   ): Promise<EventVoteResponseDto> {
     const [locked] = await tx.$queryRaw<
-      { status: EventStatuses; voteThreshold: number; startsAt: Date }[]
+      { status: EventStatuses; voteThreshold: number; createdAt: Date }[]
     >`
-      SELECT "status", "voteThreshold", "startsAt" FROM "Event" WHERE "id" = ${eventId} FOR UPDATE`;
+      SELECT "status", "voteThreshold", "createdAt" FROM "Event" WHERE "id" = ${eventId} FOR UPDATE`;
     if (!locked) {
       throw new NotFoundException('Event not found');
     }
@@ -650,7 +651,7 @@ export class EventsService {
     stage: ModerationStage,
     actor: User,
     id: string,
-    data: { status: DecisionStatus; declineReason?: string | null },
+    data: { status: DecisionStatus; declineReason?: string | null; startsAt?: Date },
   ): Promise<EventResponseDto> {
     const event = await this.findEventOrThrow(id);
     if (!stage.mayModerate(actor, event)) {
@@ -659,16 +660,15 @@ export class EventsService {
     if (event.status !== stage.from) {
       throw new ConflictException(`Event is already ${event.status}`);
     }
-    const leadMs = EXPIRES_BEFORE_START_MS[stage.from];
-    if (isPastDeadline(event.startsAt, leadMs)) {
+    if (isPastDeadline(event.createdAt)) {
       throw new ConflictException(stage.lateMessage);
     }
 
     // The status condition makes the transition atomic: if two requests race,
-    // only the first one changes the row, the second gets 409. The startsAt
+    // only the first one changes the row, the second gets 409. The createdAt
     // condition does the same against the expiration job.
     const { count } = await this.prisma.event.updateMany({
-      where: { id, status: stage.from, startsAt: { gt: deadlineCutoff(leadMs) } },
+      where: { id, status: stage.from, createdAt: { gt: deadlineCutoff() } },
       data,
     });
     if (count === 0) {
@@ -680,18 +680,14 @@ export class EventsService {
   }
 
   /**
-   * Picks the teacher of the class. If a class has several teachers, the one
-   * with the smallest id is chosen, so the choice is stable.
+   * Picks the teacher of the class, null if it has none yet. If a class has
+   * several teachers, the one with the smallest id is chosen, so the choice is stable.
    */
-  private async findClassTeacher(className: string): Promise<User> {
-    const teacher = await this.prisma.user.findFirst({
+  private findClassTeacher(className: string): Promise<User | null> {
+    return this.prisma.user.findFirst({
       where: { role: UserRoles.TEACHER, class: className },
       orderBy: { id: 'asc' },
     });
-    if (!teacher) {
-      throw new BadRequestException(`Class "${className}" has no teacher to moderate the event`);
-    }
-    return teacher;
   }
 
   private async findEventOrThrow(id: string): Promise<EventWithUsers> {

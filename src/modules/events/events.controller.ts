@@ -40,6 +40,7 @@ import {
   MAX_IMAGE_SIZE_BYTES,
 } from '../images/images.constants';
 import { ValidateImageFilePipe } from '../images/pipes/validate-image-file.pipe';
+import { AdminApproveEventDto } from './dto/admin-approve-event.dto';
 import { CreateEventDto } from './dto/create-event.dto';
 import { DeclineEventDto } from './dto/decline-event.dto';
 import { EventResponseDto } from './dto/event-response.dto';
@@ -65,13 +66,14 @@ export class EventsController {
     summary: 'Create an event request',
     description:
       "Pupil only. The event gets status ON_MODERATION and is sent to the teacher of the pupil's class. " +
-      'votingClosesAt (startsAt - 2 days) is computed: moderation and voting must finish by then.',
+      'It has no date: an admin sets startsAt on approval. votingClosesAt (createdAt + 1 month) is computed: ' +
+      'teacher moderation, voting and the admin decision must finish by then.',
   })
   @ApiBody({ type: CreateEventDto })
   @ApiCreatedResponse({ type: EventResponseDto })
   @ApiBadRequestResponse({
     description:
-      "Validation failed (incl. startsAt without a timezone), startsAt is not more than 2 days ahead, or the pupil's class has no teacher",
+      "Validation failed (incl. an unknown field such as startsAt), or the pupil's class has no teacher",
   })
   @ApiForbiddenResponse({ description: 'Caller is not a pupil' })
   @ApiConflictResponse({ description: 'Event with this name already exists' })
@@ -87,14 +89,14 @@ export class EventsController {
   @ApiOperation({
     summary: 'Preview the probability that an event takes place',
     description:
-      'Any authenticated user. Computed from events of the same category that are FINALIZED (success) or EXPIRED (failure), ' +
-      'even if they have not started yet; declined and pending events are ignored. Only the start time of day (Minsk time) is compared, not the date. ' +
-      'At least 5 such events at the same time, all successful: 0.9; no history: 0.5.',
+      'Any authenticated user. Computed from FINALIZED events of the same category (the only ones with a date set by an admin), ' +
+      'even if they have not started yet. With startsAt only the start time of day (Minsk time) is compared, not the date; ' +
+      'without it every such event counts fully. At least 5 such events (at the same time): 0.9; no history: 0.5.',
   })
   @ApiOkResponse({ type: ProbabilityResponseDto })
   @ApiBadRequestResponse({
     description:
-      'Invalid category, or startsAt is not a date-time with a timezone',
+      'Invalid category, or startsAt is given but is not a date-time with a timezone',
   })
   async previewProbability(
     @Query() query: ProbabilityQueryDto,
@@ -102,7 +104,7 @@ export class EventsController {
     return {
       successProbability: await this.eventsService.previewProbability(
         query.category,
-        new Date(query.startsAt),
+        query.startsAt ? new Date(query.startsAt) : null,
       ),
     };
   }
@@ -111,7 +113,7 @@ export class EventsController {
   @ApiOperation({
     summary: "Teacher's moderation list",
     description:
-      'Teacher only. Events assigned to the caller with status ON_MODERATION, oldest first. Events past their voting deadline are hidden.',
+      'Teacher only. Events assigned to the caller with status ON_MODERATION, oldest first. Events past their deadline (a month after creation) are hidden.',
   })
   @ApiOkResponse({ type: [EventResponseDto] })
   @ApiForbiddenResponse({ description: 'Caller is not a teacher' })
@@ -160,7 +162,7 @@ export class EventsController {
   @ApiOperation({
     summary: "Admin's moderation list",
     description:
-      'Admin only. Events with status ON_ADMIN_MODERATION (passed the vote), oldest first. Events that have already started are hidden.',
+      'Admin only. Events with status ON_ADMIN_MODERATION (passed the vote), oldest first. Events past their deadline (a month after creation) are hidden.',
   })
   @ApiOkResponse({ type: [EventResponseDto] })
   @ApiForbiddenResponse({ description: 'Caller is not an admin' })
@@ -198,7 +200,7 @@ export class EventsController {
   @ApiNotFoundResponse({ description: 'Event not found' })
   @ApiConflictResponse({
     description:
-      'Event is not on moderation anymore, or voting for it has closed (2 days before the start)',
+      'Event is not on moderation anymore, or its deadline (a month after creation) has passed',
   })
   approve(
     @CurrentUser() actor: User,
@@ -221,7 +223,7 @@ export class EventsController {
   @ApiNotFoundResponse({ description: 'Event not found' })
   @ApiConflictResponse({
     description:
-      'Event is not on moderation anymore, or voting for it has closed (2 days before the start)',
+      'Event is not on moderation anymore, or its deadline (a month after creation) has passed',
   })
   decline(
     @CurrentUser() actor: User,
@@ -235,20 +237,23 @@ export class EventsController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Admin approves an event',
-    description: 'Admin only. ON_ADMIN_MODERATION -> FINALIZED.',
+    description:
+      'Admin only. ON_ADMIN_MODERATION -> FINALIZED. The admin sets the date (startsAt, in the future); it cannot be changed afterwards.',
   })
-  @ApiUuidParam()
+  @ApiUuidParam('startsAt is missing, has no timezone, or is not in the future')
+  @ApiBody({ type: AdminApproveEventDto })
   @ApiOkResponse({ type: EventResponseDto })
   @ApiForbiddenResponse({ description: 'Caller is not an admin' })
   @ApiNotFoundResponse({ description: 'Event not found' })
   @ApiConflictResponse({
-    description: 'Event is not on admin moderation, or has already started',
+    description: 'Event is not on admin moderation, or its deadline (a month after creation) has passed',
   })
   adminApprove(
     @CurrentUser() actor: User,
     @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AdminApproveEventDto,
   ): Promise<EventResponseDto> {
-    return this.eventsService.adminApprove(actor, id);
+    return this.eventsService.adminApprove(actor, id, dto);
   }
 
   @Post(':id/admin/decline')
@@ -264,7 +269,7 @@ export class EventsController {
   @ApiForbiddenResponse({ description: 'Caller is not an admin' })
   @ApiNotFoundResponse({ description: 'Event not found' })
   @ApiConflictResponse({
-    description: 'Event is not on admin moderation, or has already started',
+    description: 'Event is not on admin moderation, or its deadline (a month after creation) has passed',
   })
   adminDecline(
     @CurrentUser() actor: User,
@@ -352,7 +357,7 @@ export class EventsController {
   @ApiOperation({
     summary: 'Vote for an event',
     description:
-      "Pupil only. The event must be ON_VOTE and voting must be open (until 2 days before the start). One vote per pupil per event. Audience by scope, relative to the initiator's class: CLASS - same class, GRADE - same grade (first number of the class name), SCHOOL - any pupil. The vote that reaches voteThreshold moves the event to ON_ADMIN_MODERATION.",
+      "Pupil only. The event must be ON_VOTE and voting must be open (until a month after the event was created). One vote per pupil per event. Audience by scope, relative to the initiator's class: CLASS - same class, GRADE - same grade (first number of the class name), SCHOOL - any pupil. The vote that reaches voteThreshold moves the event to ON_ADMIN_MODERATION.",
   })
   @ApiUuidParam()
   @ApiOkResponse({ type: EventVoteResponseDto })
@@ -362,7 +367,7 @@ export class EventsController {
   @ApiNotFoundResponse({ description: 'Event not found' })
   @ApiConflictResponse({
     description:
-      'Event is not on vote, voting has closed (2 days before the start), or the pupil has already voted',
+      'Event is not on vote, voting has closed (a month after creation), or the pupil has already voted',
   })
   vote(
     @CurrentUser() actor: User,

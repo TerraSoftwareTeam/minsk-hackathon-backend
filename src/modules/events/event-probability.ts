@@ -4,35 +4,33 @@ import {
 } from '../../../prisma/generated/prisma/client';
 
 /**
- * Probability that an event takes place, estimated from other events of the
- * same category whose outcome is already known (decided, even if not started
- * yet), weighted by how close their start time of day is to this one.
+ * Probability that an event takes place, estimated from the events of the
+ * same category that took place: FINALIZED, with the date set by the admin
+ * (even if not started yet). Pending, declined and expired events carry no
+ * date and are not counted. The more such events the history holds at this
+ * start time of day, the higher the estimate.
  *
  * All events are held on Saturdays, so only the time of day matters, not the
- * date. Time is taken in Minsk local time (UTC+3 all year, no DST).
+ * date. Time is taken in Minsk local time (UTC+3 all year, no DST). An event
+ * without a date yet (any status before FINALIZED) has no time to compare:
+ * every FINALIZED event of its category counts with full weight.
  *
- *   wᵢ = exp(−dᵢ² / 2σ²)        dᵢ - difference of start times in minutes (across midnight too)
+ *   wᵢ = exp(−dᵢ² / 2σ²)        dᵢ - difference of start times in minutes (across midnight too);
+ *                               wᵢ = 1 when the estimated event has no date
  *   W  = Σ wᵢ                   evidence: how many events at this time the history holds
- *   r  = Σ wᵢ·sᵢ / W            success rate at this time (sᵢ = 1 if FINALIZED, 0 if EXPIRED)
  *   k  = min(1, W / N)          confidence: full once the evidence reaches N events
- *   target = P_MIN + (P_MAX − P_MIN) · r
- *   P      = P_BASE + (target − P_BASE) · k
+ *   P  = P_BASE + (P_MAX − P_BASE) · k
  *
  * Properties:
- * - N or more events at the same time, all successful: exactly P_MAX (90%). No history: P_BASE.
- * - Events at a distant time have weight ≈ 0, so they change neither r nor k:
- *   a success at 20:00 does not lower the estimate for 12:00, a failure does not raise it.
- * - Monotonic: another success never lowers P, another failure never raises it.
+ * - N or more events at the same time: exactly P_MAX (90%). No history: P_BASE.
+ * - Events at a distant time have weight ≈ 0: a success at 20:00 barely raises the estimate for 12:00.
+ * - Monotonic: another FINALIZED event never lowers P.
  */
 
-/** Outcome of each status that counts. Declined requests and pending events are ignored. */
-export const OUTCOME_STATUSES = [
-  EventStatuses.FINALIZED,
-  EventStatuses.EXPIRED,
-] as const;
+/** The only status that counts: the event took place and has its date. */
+export const OUTCOME_STATUS = EventStatuses.FINALIZED;
 
 export const P_MAX = 0.9;
-export const P_MIN = 0.05;
 export const P_BASE = 0.5;
 /** Width of the time similarity kernel: 1 h -> 0.88, 2 h -> 0.61, 4 h -> 0.14. */
 export const TIME_SIGMA_MINUTES = 120;
@@ -45,7 +43,7 @@ const MINUTES_PER_DAY = 24 * 60;
 export type ProbabilityHistoryEvent = {
   id: string;
   category: EventCategories;
-  startsAt: Date;
+  startsAt: Date | null;
   status: EventStatuses;
 };
 
@@ -63,47 +61,32 @@ export function timeSimilarity(a: Date, b: Date): number {
   return Math.exp(-(d * d) / (2 * TIME_SIGMA_MINUTES * TIME_SIGMA_MINUTES));
 }
 
-function isOutcome(status: EventStatuses): boolean {
-  return (OUTCOME_STATUSES as readonly EventStatuses[]).includes(status);
-}
-
 /**
- * Probability (0..1) for an event of `category` starting at `startsAt`.
- * Uses `history` events of the same category with a known outcome, except
- * `excludeId` (the event being estimated). The outcome is known once the event
- * is decided, so a FINALIZED event counts even before it starts.
+ * Probability (0..1) for an event of `category` starting at `startsAt`
+ * (null: no date yet, the time is not compared). Uses the FINALIZED `history`
+ * events of the same category with a date, except `excludeId` (the event being
+ * estimated). A FINALIZED event counts even before it starts.
  */
 export function computeSuccessProbability(
   category: EventCategories,
-  startsAt: Date,
+  startsAt: Date | null,
   history: readonly ProbabilityHistoryEvent[],
   excludeId?: string,
 ): number {
-  const known = history.filter(
-    (event) =>
-      event.id !== excludeId &&
-      event.category === category &&
-      isOutcome(event.status),
-  );
-  if (known.length === 0) {
-    return P_BASE;
-  }
-
   let evidence = 0;
-  let successWeight = 0;
-  for (const event of known) {
-    const w = timeSimilarity(startsAt, event.startsAt);
-    evidence += w;
-    if (event.status === EventStatuses.FINALIZED) {
-      successWeight += w;
+  for (const event of history) {
+    if (
+      event.id === excludeId ||
+      event.category !== category ||
+      event.status !== OUTCOME_STATUS ||
+      event.startsAt === null
+    ) {
+      continue;
     }
+    evidence +=
+      startsAt === null ? 1 : timeSimilarity(startsAt, event.startsAt);
   }
-
-  // w > 0 always (at most 12 h apart: exp(-18) ≈ 1.5e-8), so evidence > 0 here.
-  const successRate = successWeight / evidence;
   const confidence = Math.min(1, evidence / FULL_CONFIDENCE_SAMPLE);
-
-  const target = P_MIN + (P_MAX - P_MIN) * successRate;
-  const probability = P_BASE + (target - P_BASE) * confidence;
+  const probability = P_BASE + (P_MAX - P_BASE) * confidence;
   return Math.round(probability * 10000) / 10000;
 }

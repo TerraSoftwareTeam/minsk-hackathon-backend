@@ -2,17 +2,21 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Prisma, User, UserRoles } from '../../../prisma/generated/prisma/client';
 import { hasRequiredClass } from '../../common/auth/class-invariant';
 import { PrismaService } from '../../prisma/prisma.service';
+import { assignEventsWithoutTeacher } from '../events/teacher-assignment';
 import { toUserResponse } from './user.mapper';
 import { AuthResponseDto, LoginDto, RegisterDto } from './dto/register.dto';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
@@ -22,6 +26,8 @@ export class AuthService {
    * Single entry point for PUPIL/TEACHER: register or log in by schoolsById.
    * - schoolsById already exists: log that user in, all other fields are ignored.
    * - schoolsById is new: create the user from name, surname, role and class.
+   *   A pupil may join a class that has no teacher yet. A new teacher takes
+   *   the events of their class's pupils that were created without a teacher.
    */
   async register(dto: RegisterDto): Promise<AuthResponseDto> {
     const existing = await this.prisma.user.findUnique({
@@ -32,13 +38,10 @@ export class AuthService {
     }
 
     const data = this.newUserData(dto);
-    if (data.role === UserRoles.PUPIL) {
-      await this.assertClassHasTeacher(data.class);
-    }
 
+    let user: User;
     try {
-      const user = await this.prisma.user.create({ data });
-      return this.buildAuthResponse(user);
+      user = await this.prisma.user.create({ data });
     } catch (error) {
       // A concurrent request created the same schoolsById first: log in as that user.
       if (
@@ -53,6 +56,29 @@ export class AuthService {
         }
       }
       throw error;
+    }
+    if (user.role === UserRoles.TEACHER) {
+      await this.takeEventsWithoutTeacher(user.id, data.class);
+    }
+    return this.buildAuthResponse(user);
+  }
+
+  /**
+   * Runs after the teacher is committed, so a pupil creating an event at the
+   * same time either is seen here or sees the teacher (teacher-assignment.ts).
+   * A failure does not fail the registration: the teacher already exists.
+   */
+  private async takeEventsWithoutTeacher(teacherId: string, className: string): Promise<void> {
+    try {
+      const count = await assignEventsWithoutTeacher(this.prisma, teacherId, className);
+      if (count > 0) {
+        this.logger.log(`Teacher ${teacherId} took ${count} event(s) of class "${className}"`);
+      }
+    } catch (error) {
+      this.logger.error(
+        `Failed to assign the events of class "${className}" to teacher ${teacherId}`,
+        error instanceof Error ? error.stack : error,
+      );
     }
   }
 
@@ -79,21 +105,6 @@ export class AuthService {
       throw new ForbiddenException(`${user.role} has no class assigned, contact an admin`);
     }
     return this.buildAuthResponse(user);
-  }
-
-  /**
-   * A pupil may join only an existing class, i.e. one that already has a teacher.
-   * Otherwise nobody could manage the pupil, and a typo in the class would
-   * silently create a new, orphaned class.
-   */
-  private async assertClassHasTeacher(className: string): Promise<void> {
-    const teacher = await this.prisma.user.findFirst({
-      where: { role: UserRoles.TEACHER, class: className },
-      select: { id: true },
-    });
-    if (!teacher) {
-      throw new BadRequestException(`Class "${className}" has no teacher yet`);
-    }
   }
 
   async login(dto: LoginDto): Promise<AuthResponseDto> {

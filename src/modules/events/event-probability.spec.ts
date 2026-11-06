@@ -76,44 +76,41 @@ describe('event probability', () => {
     ).toBe(0.74);
   });
 
-  it('all earlier events at the same time failed: minimum', () => {
-    expect(
-      computeSuccessProbability(SPORTS, TARGET, times(5, '12:00', EXPIRED)),
-    ).toBe(0.05);
-  });
-
-  it('mixed history: weighted by how close the start time is', () => {
-    const history = [
-      past('12:00', FINALIZED, 1),
-      past('13:00', FINALIZED, 2),
-      past('11:00', FINALIZED, 3),
-      past('18:00', EXPIRED, 4),
-      past('10:00', EXPIRED, 5),
-    ];
-    const p = computeSuccessProbability(SPORTS, TARGET, history);
-    expect(p).toBeGreaterThan(0.6);
-    expect(p).toBeLessThan(0.7);
-  });
-
-  it('events at a very different time barely matter, whatever their outcome', () => {
-    const same = times(5, '12:00', FINALIZED);
-    const far = (status: EventStatuses) =>
-      Array.from({ length: 10 }, (_, i) => past('20:00', status, i + 6));
-    expect(
-      computeSuccessProbability(SPORTS, TARGET, [...same, ...far(EXPIRED)]),
-    ).toBeCloseTo(P_MAX, 2);
-    // A success elsewhere must not lower the estimate (regression: it used to drop to 0.70).
-    expect(
-      computeSuccessProbability(SPORTS, TARGET, [...same, ...far(FINALIZED)]),
-    ).toBe(P_MAX);
-    // Successes elsewhere must not hide a failure at this time.
-    const failedHere = [past('12:00', EXPIRED)];
+  it('only FINALIZED events count: a failure or a pending event changes nothing', () => {
+    const same = times(3, '12:00', FINALIZED);
+    const p = computeSuccessProbability(SPORTS, TARGET, same);
     expect(
       computeSuccessProbability(SPORTS, TARGET, [
-        ...failedHere,
-        ...far(FINALIZED),
+        ...same,
+        ...times(5, '12:00', EXPIRED),
+        ...times(5, '12:00', ON_VOTE),
       ]),
-    ).toBeCloseTo(computeSuccessProbability(SPORTS, TARGET, failedHere), 2);
+    ).toBe(p);
+  });
+
+  it('a FINALIZED event without a date is not counted', () => {
+    expect(
+      computeSuccessProbability(SPORTS, TARGET, [
+        { ...past('12:00', FINALIZED), startsAt: null },
+      ]),
+    ).toBe(P_BASE);
+  });
+
+  it('no date to estimate: every FINALIZED event of the category counts fully', () => {
+    const scattered = ['08:00', '12:00', '16:00', '20:00', '23:00'].map((t) =>
+      past(t, FINALIZED),
+    );
+    expect(computeSuccessProbability(SPORTS, null, scattered)).toBe(P_MAX);
+    expect(computeSuccessProbability(SPORTS, null, scattered.slice(0, 1))).toBe(0.58);
+    expect(computeSuccessProbability(SPORTS, TARGET, scattered)).toBeLessThan(P_MAX);
+  });
+
+  it('events at a very different time barely matter', () => {
+    const far = Array.from({ length: 10 }, (_, i) => past('20:00', FINALIZED, i + 6));
+    expect(computeSuccessProbability(SPORTS, TARGET, far)).toBeCloseTo(P_BASE, 2);
+    expect(
+      computeSuccessProbability(SPORTS, TARGET, [...times(5, '12:00', FINALIZED), ...far]),
+    ).toBe(P_MAX);
   });
 
   it('compares the time around midnight: 23:30 and 00:30 are 1 hour apart', () => {
@@ -132,7 +129,7 @@ describe('event probability', () => {
     );
   });
 
-  it('objective: bounded, monotonic in outcomes, independent of order (random histories)', () => {
+  it('objective: bounded, monotonic, independent of order (random histories)', () => {
     // Deterministic pseudo-random generator, so a failure is reproducible.
     let seed = 42;
     const rand = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31;
@@ -146,23 +143,17 @@ describe('event probability', () => {
       const history = Array.from({ length: Math.floor(rand() * 15) }, () =>
         randomEvent(rand() < 0.5 ? FINALIZED : EXPIRED),
       );
-      const p = computeSuccessProbability(SPORTS, TARGET, history);
-      expect(p).toBeGreaterThanOrEqual(0.05);
-      expect(p).toBeLessThanOrEqual(P_MAX);
-
-      const extra = randomEvent(FINALIZED);
-      expect(
-        computeSuccessProbability(SPORTS, TARGET, [...history, extra]),
-      ).toBeGreaterThanOrEqual(p);
-      expect(
-        computeSuccessProbability(SPORTS, TARGET, [
-          ...history,
-          { ...extra, status: EXPIRED },
-        ]),
-      ).toBeLessThanOrEqual(p);
-      expect(
-        computeSuccessProbability(SPORTS, TARGET, [...history].reverse()),
-      ).toBe(p);
+      for (const target of [TARGET, null]) {
+        const p = computeSuccessProbability(SPORTS, target, history);
+        expect(p).toBeGreaterThanOrEqual(P_BASE);
+        expect(p).toBeLessThanOrEqual(P_MAX);
+        expect(
+          computeSuccessProbability(SPORTS, target, [...history, randomEvent(FINALIZED)]),
+        ).toBeGreaterThanOrEqual(p);
+        expect(
+          computeSuccessProbability(SPORTS, target, [...history].reverse()),
+        ).toBe(p);
+      }
     }
   });
 

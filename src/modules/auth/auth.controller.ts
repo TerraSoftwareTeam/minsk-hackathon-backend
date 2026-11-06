@@ -28,6 +28,8 @@ export class AuthController {
     description:
       'If a user with this schoolsById exists, logs them in and ignores the other fields. ' +
       'Otherwise creates a new user from name, surname, role and class (all required then). ' +
+      "A pupil may register into a class that has no teacher yet; their events wait without a teacher, " +
+      'and a new teacher of the class takes all of them for moderation. ' +
       'Returns a JWT access token either way. Public endpoint, no auth required.',
   })
   @ApiBody({
@@ -65,7 +67,7 @@ export class AuthController {
   })
   @ApiBadRequestResponse({
     description:
-      'Validation failed (invalid fields, blank class, unknown fields), a new user is missing name/surname/role/class, or a new PUPIL registers into a class that has no teacher',
+      'Validation failed (invalid fields, blank class, unknown fields), or a new user is missing name/surname/role/class',
   })
   @ApiForbiddenResponse({ description: 'Existing PUPIL or TEACHER has no class assigned' })
   register(@Body() dto: RegisterDto): Promise<AuthResponseDto> {

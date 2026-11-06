@@ -32,6 +32,7 @@ describe('AuthService.register', () => {
   let service: AuthService;
   let prisma: {
     user: { create: jest.Mock; findFirst: jest.Mock; findUnique: jest.Mock };
+    event: { updateMany: jest.Mock };
   };
   let jwt: { signAsync: jest.Mock };
 
@@ -50,6 +51,7 @@ describe('AuthService.register', () => {
         // By default schoolsById is new.
         findUnique: jest.fn().mockResolvedValue(null),
       },
+      event: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
     };
     jwt = { signAsync: jest.fn().mockResolvedValue('signed.jwt.token') };
     service = new AuthService(
@@ -105,23 +107,41 @@ describe('AuthService.register', () => {
       expect(result).toEqual({ accessToken: 'signed.jwt.token', user: expectedUser });
     });
 
-    it('pupil: checks that the class has a teacher', async () => {
+    it('pupil: registers into a class that has no teacher yet, no events touched', async () => {
+      prisma.user.findFirst.mockResolvedValue(null);
       prisma.user.create.mockResolvedValue(storedUser);
 
-      await service.register(dto);
-
-      expect(prisma.user.findFirst).toHaveBeenCalledWith({
-        where: { role: UserRoles.TEACHER, class: '10A' },
-        select: { id: true },
+      await expect(service.register(dto)).resolves.toEqual({
+        accessToken: 'signed.jwt.token',
+        user: expectedUser,
       });
+      expect(prisma.user.findFirst).not.toHaveBeenCalled();
+      expect(prisma.event.updateMany).not.toHaveBeenCalled();
     });
 
-    it('pupil: BadRequest and no user created when the class has no teacher', async () => {
-      prisma.user.findFirst.mockResolvedValue(null);
+    it('teacher: takes the events of their class created without a teacher', async () => {
+      prisma.user.create.mockResolvedValue({ ...storedUser, id: 't9', role: UserRoles.TEACHER });
+      prisma.event.updateMany.mockResolvedValue({ count: 2 });
 
-      await expect(service.register(dto)).rejects.toBeInstanceOf(BadRequestException);
-      expect(prisma.user.create).not.toHaveBeenCalled();
-      expect(jwt.signAsync).not.toHaveBeenCalled();
+      await service.register({ ...dto, schoolsById: 'school-user-9', role: UserRoles.TEACHER });
+
+      expect(prisma.event.updateMany).toHaveBeenCalledWith({
+        where: { teacherId: null, initiator: { class: '10A' } },
+        data: { teacherId: 't9' },
+      });
+      // After the teacher is committed, so a concurrent event creation is not missed.
+      expect(prisma.user.create.mock.invocationCallOrder[0]).toBeLessThan(
+        prisma.event.updateMany.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('teacher: still registered when taking the events fails', async () => {
+      prisma.user.create.mockResolvedValue({ ...storedUser, id: 't9', role: UserRoles.TEACHER });
+      prisma.event.updateMany.mockRejectedValue(new Error('db down'));
+
+      await expect(
+        service.register({ ...dto, schoolsById: 'school-user-9', role: UserRoles.TEACHER }),
+      ).resolves.toMatchObject({ accessToken: 'signed.jwt.token' });
     });
 
     it('teacher: registers without a teacher check (the first teacher opens the class)', async () => {
