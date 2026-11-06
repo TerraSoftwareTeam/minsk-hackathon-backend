@@ -4,6 +4,7 @@ import {
   ApiBody,
   ApiConflictResponse,
   ApiCreatedResponse,
+  ApiForbiddenResponse,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
@@ -60,7 +61,8 @@ export class AuthController {
     type: AuthResponseDto,
   })
   @ApiBadRequestResponse({
-    description: 'Validation failed (missing/invalid fields), or a PUPIL registers into a class that has no teacher',
+    description:
+      'Validation failed (missing/invalid fields, blank class, unknown fields), or a PUPIL registers into a class that has no teacher',
   })
   @ApiConflictResponse({ description: 'User with this schoolsById already exists' })
   register(@Body() dto: RegisterDto): Promise<AuthResponseDto> {
@@ -93,6 +95,7 @@ export class AuthController {
   })
   @ApiBadRequestResponse({ description: 'Validation failed (missing schoolsById or id for the role)' })
   @ApiUnauthorizedResponse({ description: 'No user with this role and identifier' })
+  @ApiForbiddenResponse({ description: 'PUPIL or TEACHER has no class assigned' })
   login(@Body() dto: LoginDto): Promise<AuthResponseDto> {
     return this.authService.login(dto);
   }

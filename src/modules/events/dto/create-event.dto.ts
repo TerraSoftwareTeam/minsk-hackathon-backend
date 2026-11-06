@@ -14,19 +14,32 @@ import {
 import { EventCategories, Scopes } from '../../../../prisma/generated/prisma/client';
 
 export class CreateEventDto {
-  @ApiProperty({ example: 'Class trip to the museum', description: 'Event name (unique)' })
+  @ApiProperty({
+    example: 'Class trip to the museum',
+    maxLength: 200,
+    description: 'Event name (unique)',
+  })
   @IsString()
   @IsNotEmpty()
   @MaxLength(200)
   name!: string;
 
-  @ApiPropertyOptional({ example: 'Saturday, 10:00, meeting at school' })
+  @ApiPropertyOptional({
+    example: 'Saturday, 10:00, meeting at school',
+    maxLength: 5000,
+    description: 'Free-form details',
+  })
   @IsOptional()
   @IsString()
   @MaxLength(5000)
   description?: string;
 
-  @ApiPropertyOptional({ enum: Scopes, default: Scopes.CLASS, description: 'Who the event is for' })
+  @ApiPropertyOptional({
+    enum: Scopes,
+    default: Scopes.CLASS,
+    description:
+      "Who may vote, relative to the author's class: CLASS - same class, GRADE - same grade (first number of the class name), SCHOOL - any pupil",
+  })
   @IsOptional()
   @IsEnum(Scopes)
   scope?: Scopes;
@@ -45,6 +58,7 @@ export class CreateEventDto {
   category!: EventCategories;
 
   @ApiProperty({
+    type: 'integer',
     example: 15,
     minimum: 1,
     maximum: 10000,
@@ -57,6 +71,7 @@ export class CreateEventDto {
 
   @ApiProperty({
     example: '2026-12-01T10:00:00+03:00',
+    format: 'date-time',
     description:
       'When the event starts: ISO 8601 date-time with a timezone (Z or ±hh:mm), more than 2 days ahead. ' +
       'Voting closes 2 days before it: an event not approved and voted by then becomes EXPIRED. ' +

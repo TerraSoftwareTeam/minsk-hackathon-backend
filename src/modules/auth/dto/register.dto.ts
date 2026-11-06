@@ -48,7 +48,10 @@ export class RegisterDto {
   @IsIn(SELF_REGISTRABLE_ROLES)
   role!: UserRoles;
 
-  @ApiProperty({ example: '10A', description: 'Class name' })
+  @ApiProperty({
+    example: '10A',
+    description: 'Class name; surrounding spaces are trimmed, must not be blank',
+  })
   @Transform(trimString)
   @IsString()
   @IsNotEmpty()
@@ -75,6 +78,7 @@ export class LoginDto {
 
   @ApiPropertyOptional({
     example: '3f2c9a4e-1b7d-4e8a-9c0f-2a6b5d7e8f90',
+    format: 'uuid',
     description: 'User id (UUID). Required for ADMIN',
   })
   @ValidateIf((o: LoginDto) => o.role === UserRoles.ADMIN)
@@ -83,9 +87,12 @@ export class LoginDto {
 }
 
 export class AuthResponseDto {
-  @ApiProperty({ description: 'JWT access token' })
+  @ApiProperty({
+    example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIzZjJjIn0.signature',
+    description: 'JWT access token: send it as "Authorization: Bearer <token>"',
+  })
   accessToken!: string;
 
-  @ApiProperty({ type: UserResponseDto })
+  @ApiProperty({ type: UserResponseDto, description: 'The logged-in user' })
   user!: UserResponseDto;
 }

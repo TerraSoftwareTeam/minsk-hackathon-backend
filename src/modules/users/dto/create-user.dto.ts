@@ -20,17 +20,17 @@ export class CreateUserDto {
   @IsNotEmpty()
   schoolsById?: string;
 
-  @ApiProperty({ example: 'Ivan' })
+  @ApiProperty({ example: 'Ivan', description: 'First name' })
   @IsString()
   @IsNotEmpty()
   name!: string;
 
-  @ApiProperty({ example: 'Ivanov' })
+  @ApiProperty({ example: 'Ivanov', description: 'Last name' })
   @IsString()
   @IsNotEmpty()
   surname!: string;
 
-  @ApiProperty({ example: 'Petrovich' })
+  @ApiProperty({ example: 'Petrovich', description: "Father's name" })
   @IsString()
   @IsNotEmpty()
   fathersName!: string;
@@ -45,7 +45,8 @@ export class CreateUserDto {
 
   @ApiPropertyOptional({
     example: '10A',
-    description: "Class. Required for PUPIL/TEACHER, forbidden for ADMIN. Defaults to the teacher's class",
+    description:
+      "Class. Required for PUPIL/TEACHER, forbidden for ADMIN. Defaults to the teacher's class. Surrounding spaces are trimmed, must not be blank",
   })
   @IsOptional()
   @Transform(trimString)

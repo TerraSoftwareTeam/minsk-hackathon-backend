@@ -2,13 +2,21 @@ import { ApiProperty } from '@nestjs/swagger';
 import { EventStatuses } from '../../../../prisma/generated/prisma/client';
 
 export class EventVoteResponseDto {
-  @ApiProperty({ example: '3f2c9a4e-1b7d-4e8a-9c0f-2a6b5d7e8f90' })
+  @ApiProperty({ example: '3f2c9a4e-1b7d-4e8a-9c0f-2a6b5d7e8f90', format: 'uuid' })
   eventId!: string;
 
-  @ApiProperty({ example: 12, description: 'Total number of votes for the event after this vote' })
+  @ApiProperty({
+    type: 'integer',
+    example: 12,
+    description: 'Total number of votes for the event after this vote',
+  })
   votesCount!: number;
 
-  @ApiProperty({ example: 15 })
+  @ApiProperty({
+    type: 'integer',
+    example: 15,
+    description: 'Votes needed to move the event to ON_ADMIN_MODERATION',
+  })
   voteThreshold!: number;
 
   @ApiProperty({

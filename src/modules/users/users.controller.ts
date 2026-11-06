@@ -28,6 +28,7 @@ import {
 import { User, UserRoles } from '../../../prisma/generated/prisma/client';
 import { CurrentUser } from '../../common/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../common/auth/jwt-auth.guard';
+import { ApiUuidParam } from '../../common/swagger/api-uuid-param.decorator';
 import { UserResponseDto } from '../auth/dto/user-response.dto';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -86,6 +87,7 @@ export class UsersController {
 
   @Get(':id')
   @ApiOperation({ summary: 'Get a user by id', description: ROLE_HINT })
+  @ApiUuidParam()
   @ApiOkResponse({ type: UserResponseDto })
   @ApiForbiddenResponse({ description: 'Caller may not manage this user' })
   @ApiNotFoundResponse({ description: 'User not found' })
@@ -103,7 +105,7 @@ export class UsersController {
   })
   @ApiBody({ type: UpdateUserDto })
   @ApiOkResponse({ type: UserResponseDto })
-  @ApiBadRequestResponse({ description: 'Validation failed or school fields do not match the role' })
+  @ApiUuidParam('validation failed, or school fields do not match the role')
   @ApiForbiddenResponse({ description: 'Caller may not change this user or these fields' })
   @ApiNotFoundResponse({ description: 'User not found' })
   @ApiConflictResponse({ description: 'User with this schoolsById already exists' })
@@ -118,9 +120,13 @@ export class UsersController {
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Delete a user', description: ROLE_HINT })
+  @ApiUuidParam()
   @ApiNoContentResponse({ description: 'Deleted' })
   @ApiForbiddenResponse({ description: 'Caller may not manage this user' })
   @ApiNotFoundResponse({ description: 'User not found' })
+  @ApiConflictResponse({
+    description: 'User is referenced by other records (e.g. created or moderates events)',
+  })
   remove(@CurrentUser() actor: User, @Param('id', ParseUUIDPipe) id: string): Promise<void> {
     return this.usersService.remove(actor, id);
   }

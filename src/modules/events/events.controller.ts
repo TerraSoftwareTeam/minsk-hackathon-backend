@@ -25,6 +25,7 @@ import {
 import { User } from '../../../prisma/generated/prisma/client';
 import { CurrentUser } from '../../common/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../common/auth/jwt-auth.guard';
+import { ApiUuidParam } from '../../common/swagger/api-uuid-param.decorator';
 import { CreateEventDto } from './dto/create-event.dto';
 import { DeclineEventDto } from './dto/decline-event.dto';
 import { EventResponseDto } from './dto/event-response.dto';
@@ -44,11 +45,15 @@ export class EventsController {
   @ApiOperation({
     summary: 'Create an event request',
     description:
-      "Pupil only. The event gets status ON_MODERATION and is sent to the teacher of the pupil's class.",
+      "Pupil only. The event gets status ON_MODERATION and is sent to the teacher of the pupil's class. " +
+      'votingClosesAt (startsAt - 2 days) is computed: moderation and voting must finish by then.',
   })
   @ApiBody({ type: CreateEventDto })
   @ApiCreatedResponse({ type: EventResponseDto })
-  @ApiBadRequestResponse({ description: "Validation failed, or the pupil's class has no teacher" })
+  @ApiBadRequestResponse({
+    description:
+      "Validation failed (incl. startsAt without a timezone), startsAt is not more than 2 days ahead, or the pupil's class has no teacher",
+  })
   @ApiForbiddenResponse({ description: 'Caller is not a pupil' })
   @ApiConflictResponse({ description: 'Event with this name already exists' })
   create(@CurrentUser() actor: User, @Body() dto: CreateEventDto): Promise<EventResponseDto> {
@@ -59,7 +64,8 @@ export class EventsController {
   @Get('moderation')
   @ApiOperation({
     summary: "Teacher's moderation list",
-    description: 'Teacher only. Events assigned to the caller with status ON_MODERATION, oldest first.',
+    description:
+      'Teacher only. Events assigned to the caller with status ON_MODERATION, oldest first. Events past their voting deadline are hidden.',
   })
   @ApiOkResponse({ type: [EventResponseDto] })
   @ApiForbiddenResponse({ description: 'Caller is not a teacher' })
@@ -83,7 +89,7 @@ export class EventsController {
   @ApiOperation({
     summary: "Pupil's voting list",
     description:
-      "Pupil only. ON_VOTE events whose scope includes the caller (relative to the initiator's class: CLASS - same class, GRADE - same grade, SCHOOL - any pupil), newest first, with the vote count and whether the caller has voted.",
+      "Pupil only. ON_VOTE events whose scope includes the caller (relative to the initiator's class: CLASS - same class, GRADE - same grade, SCHOOL - any pupil) and whose voting is still open, newest first, with the vote count and whether the caller has voted.",
   })
   @ApiOkResponse({ type: [VotingEventResponseDto] })
   @ApiForbiddenResponse({ description: 'Caller is not a pupil' })
@@ -95,7 +101,7 @@ export class EventsController {
   @ApiOperation({
     summary: "Admin's moderation list",
     description:
-      'Admin only. Events with status ON_ADMIN_MODERATION (passed the vote), oldest first.',
+      'Admin only. Events with status ON_ADMIN_MODERATION (passed the vote), oldest first. Events that have already started are hidden.',
   })
   @ApiOkResponse({ type: [EventResponseDto] })
   @ApiForbiddenResponse({ description: 'Caller is not an admin' })
@@ -108,6 +114,7 @@ export class EventsController {
     summary: 'Get an event with all its data',
     description: 'Initiator, assigned teacher or admin.',
   })
+  @ApiUuidParam()
   @ApiOkResponse({ type: EventResponseDto })
   @ApiForbiddenResponse({ description: 'Caller may not read this event' })
   @ApiNotFoundResponse({ description: 'Event not found' })
@@ -124,6 +131,7 @@ export class EventsController {
     summary: 'Approve an event',
     description: 'Assigned teacher only. ON_MODERATION -> ON_VOTE.',
   })
+  @ApiUuidParam()
   @ApiOkResponse({ type: EventResponseDto })
   @ApiForbiddenResponse({ description: 'Caller is not the assigned teacher' })
   @ApiNotFoundResponse({ description: 'Event not found' })
@@ -141,6 +149,7 @@ export class EventsController {
     summary: 'Decline an event',
     description: 'Assigned teacher only. ON_MODERATION -> DECLINED, with an optional reason.',
   })
+  @ApiUuidParam('reason is empty or longer than 2000 characters')
   @ApiBody({ type: DeclineEventDto, required: false })
   @ApiOkResponse({ type: EventResponseDto })
   @ApiForbiddenResponse({ description: 'Caller is not the assigned teacher' })
@@ -160,6 +169,7 @@ export class EventsController {
     summary: 'Admin approves an event',
     description: 'Admin only. ON_ADMIN_MODERATION -> FINALIZED.',
   })
+  @ApiUuidParam()
   @ApiOkResponse({ type: EventResponseDto })
   @ApiForbiddenResponse({ description: 'Caller is not an admin' })
   @ApiNotFoundResponse({ description: 'Event not found' })
@@ -177,6 +187,7 @@ export class EventsController {
     summary: 'Admin declines an event',
     description: 'Admin only. ON_ADMIN_MODERATION -> DECLINED_BY_ADMIN, with an optional reason.',
   })
+  @ApiUuidParam('reason is empty or longer than 2000 characters')
   @ApiBody({ type: DeclineEventDto, required: false })
   @ApiOkResponse({ type: EventResponseDto })
   @ApiForbiddenResponse({ description: 'Caller is not an admin' })
@@ -195,8 +206,9 @@ export class EventsController {
   @ApiOperation({
     summary: 'Vote for an event',
     description:
-      "Pupil only. The event must be ON_VOTE. One vote per pupil per event. Audience by scope, relative to the initiator's class: CLASS - same class, GRADE - same grade (first number of the class name), SCHOOL - any pupil.",
+      "Pupil only. The event must be ON_VOTE and voting must be open (until 2 days before the start). One vote per pupil per event. Audience by scope, relative to the initiator's class: CLASS - same class, GRADE - same grade (first number of the class name), SCHOOL - any pupil. The vote that reaches voteThreshold moves the event to ON_ADMIN_MODERATION.",
   })
+  @ApiUuidParam()
   @ApiOkResponse({ type: EventVoteResponseDto })
   @ApiForbiddenResponse({ description: "Caller is not a pupil, or is outside the event's scope" })
   @ApiNotFoundResponse({ description: 'Event not found' })
