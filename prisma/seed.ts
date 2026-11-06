@@ -1,7 +1,7 @@
 /**
- * Test data: admins, 4 classes with a teacher and pupils, and events in every
- * status with votes, so every list, the moderation flow and the success
- * probability have something to show.
+ * Test data: admins, 4 classes with a teacher and pupils, a class without a
+ * teacher, and events in every status with votes and likes, so every list, the
+ * moderation flow, likes and the success probability have something to show.
  *
  *   npm run db:seed        (or: npx prisma db seed)
  *
@@ -12,7 +12,13 @@
  * Log in:
  *   ADMIN    { "role": "ADMIN",   "schoolsById": "seed-admin-1" }   (1..2)
  *   TEACHER  { "role": "TEACHER", "schoolsById": "seed-teacher-10A" }
- *   PUPIL    { "role": "PUPIL",   "schoolsById": "seed-pupil-10A-1" }   (1..6, classes 8B 10A 10B 11A)
+ *   PUPIL    { "role": "PUPIL",   "schoolsById": "seed-pupil-10A-1" }   (1..6, classes 8B 9A 10A 10B 11A)
+ *
+ * Class 9A has no teacher: its events wait with teacherId = null. Register a teacher
+ * into it to see them taken over:
+ *   POST /auth/register { "schoolsById": "my-teacher-9A", "name": "Ирина", "surname": "Петрова",
+ *                         "role": "TEACHER", "class": "9A" }
+ * If a teacher of 9A already exists (registered by hand), the seed gives the events to them.
  */
 import 'dotenv/config';
 import { createHash } from 'node:crypto';
@@ -65,7 +71,11 @@ const ADMINS = [
   },
 ];
 
-const CLASSES = {
+/** teacher: null = the class has no teacher yet. */
+const CLASSES: Record<
+  string,
+  { teacher: readonly [string, string] | null; pupils: readonly (readonly [string, string])[] }
+> = {
   '8B': {
     teacher: ['Татьяна', 'Лукашевич'],
     pupils: [
@@ -75,6 +85,15 @@ const CLASSES = {
       ['Ева', 'Бондарь'],
       ['Артём', 'Савицкий'],
       ['Злата', 'Гончар'],
+    ],
+  },
+  '9A': {
+    teacher: null,
+    pupils: [
+      ['Роман', 'Карпович'],
+      ['Алина', 'Дубовская'],
+      ['Илья', 'Сокол'],
+      ['Милана', 'Жданович'],
     ],
   },
   '10A': {
@@ -110,9 +129,10 @@ const CLASSES = {
       ['Ульяна', 'Ясинская'],
     ],
   },
-} as const;
+};
 
 type ClassName = keyof typeof CLASSES;
+const CLASS_NAMES = Object.keys(CLASSES);
 
 const teacherId = (cls: ClassName) => seedId(`teacher:${cls}`);
 const pupilId = (cls: ClassName, n: number) => seedId(`pupil:${cls}:${n}`);
@@ -122,7 +142,7 @@ const gradeOf = (cls: ClassName) => cls.match(/\d+/)![0];
 
 /** Pupils allowed to vote for an event of `scope` created in `cls` (same rule as EventsService.isInScope). */
 function audience(cls: ClassName, scope: Scopes): string[] {
-  const classes = (Object.keys(CLASSES) as ClassName[]).filter((c) =>
+  const classes = CLASS_NAMES.filter((c) =>
     scope === Scopes.SCHOOL
       ? true
       : scope === Scopes.GRADE
@@ -149,6 +169,8 @@ type SeedEvent = {
   voteThreshold: number;
   /** Votes cast; defaults to the threshold for passed events, 0 otherwise. */
   votes?: number;
+  /** Likes; defaults to a few more than the votes for likable events, 0 otherwise. */
+  likes?: number;
   declineReason?: string;
 };
 
@@ -621,6 +643,31 @@ const UPCOMING: SeedEvent[] = [
     voteThreshold: 4,
   },
 
+  // class without a teacher: waits until a teacher registers into 9A
+  {
+    name: 'Шахматный турнир 9А',
+    description: 'Ждёт, пока в класс зарегистрируется учитель',
+    category: INTELLECTUAL,
+    scope: CLASS,
+    status: ON_MODERATION,
+    cls: '9A',
+    by: 1,
+    week: 1,
+    time: '12:00',
+    voteThreshold: 3,
+  },
+  {
+    name: 'Поход на каток',
+    category: SPORTS,
+    scope: GRADE,
+    status: ON_MODERATION,
+    cls: '9A',
+    by: 2,
+    week: 2,
+    time: '15:00',
+    voteThreshold: 3,
+  },
+
   // voting feed
   {
     name: 'Утренний турнир по футболу',
@@ -758,6 +805,21 @@ function votesFor(event: SeedEvent): number {
   return event.votes ?? (PASSED.has(event.status) ? event.voteThreshold : 0);
 }
 
+/** As LIKABLE_STATUSES in src/modules/events/events.service.ts. */
+const LIKABLE = new Set<EventStatuses>([
+  ON_VOTE,
+  ON_ADMIN_MODERATION,
+  FINALIZED,
+  DECLINED_BY_ADMIN,
+]);
+
+const ALL_PUPILS = CLASS_NAMES.flatMap(pupilsOf);
+
+function likesFor(event: SeedEvent): number {
+  if (!LIKABLE.has(event.status)) return 0;
+  return event.likes ?? Math.min(ALL_PUPILS.length, votesFor(event) + (event.by % 4) + 1);
+}
+
 /** A month, as in src/modules/events/event-deadlines.ts. */
 const DECISION_WINDOW_MS = 30 * DAY_MS;
 
@@ -806,6 +868,13 @@ function assertConsistent(event: SeedEvent, createdAt: Date, now: Date): void {
     ON_ADMIN_MODERATION,
   ] as EventStatuses[];
   const overdue = createdAt.getTime() <= now.getTime() - DECISION_WINDOW_MS;
+  const likes = likesFor(event);
+  if (likes > ALL_PUPILS.length)
+    fail(`${likes} likes but only ${ALL_PUPILS.length} pupils in the school`);
+  if (likes > 0 && !LIKABLE.has(event.status))
+    fail(`liked in status ${event.status}, before the teacher approved it`);
+  if (!CLASSES[event.cls].teacher && event.status !== ON_MODERATION && event.status !== EXPIRED)
+    fail('moved past moderation in a class that has no teacher');
   if (pending.includes(event.status) && overdue)
     fail('pending, but its deadline (a month after creation) has passed');
   if (event.status === EXPIRED && !overdue)
@@ -835,20 +904,33 @@ async function main(): Promise<void> {
           },
         });
       }
-      for (const cls of Object.keys(CLASSES) as ClassName[]) {
-        const [name, surname] = CLASSES[cls].teacher;
-        const teacher = {
-          name,
-          surname,
-          role: UserRoles.TEACHER,
-          class: cls,
-          schoolsById: `seed-teacher-${cls}`,
-        };
-        await tx.user.upsert({
-          where: { id: teacherId(cls) },
-          create: { id: teacherId(cls), ...teacher },
-          update: teacher,
-        });
+      // Teacher of each class: the seed one, or for a class without a seed teacher
+      // whoever registered into it by hand (null if nobody has yet).
+      const teachers = new Map<ClassName, string | null>();
+      for (const cls of CLASS_NAMES) {
+        const seedTeacher = CLASSES[cls].teacher;
+        if (!seedTeacher) {
+          const existing = await tx.user.findFirst({
+            where: { role: UserRoles.TEACHER, class: cls },
+            select: { id: true },
+          });
+          teachers.set(cls, existing?.id ?? null);
+        } else {
+          const [name, surname] = seedTeacher;
+          const teacher = {
+            name,
+            surname,
+            role: UserRoles.TEACHER,
+            class: cls,
+            schoolsById: `seed-teacher-${cls}`,
+          };
+          await tx.user.upsert({
+            where: { id: teacherId(cls) },
+            create: { id: teacherId(cls), ...teacher },
+            update: teacher,
+          });
+          teachers.set(cls, teacherId(cls));
+        }
         for (const [i, [pName, pSurname]] of CLASSES[cls].pupils.entries()) {
           const pupil = {
             name: pName,
@@ -894,7 +976,7 @@ async function main(): Promise<void> {
             // Only the admin sets the date, on approval.
             startsAt: event.status === FINALIZED ? planned : null,
             initiatorId: initiator,
-            teacherId: teacherId(event.cls),
+            teacherId: teachers.get(event.cls) ?? null,
             createdAt,
           },
         });
@@ -911,10 +993,21 @@ async function main(): Promise<void> {
               .map((voterId) => ({ eventId: id, voterId, createdAt })),
           });
         }
+
+        // Voters like first, then any other pupil of the school (likes are not limited by scope).
+        const likers = [...new Set([...voters, ...ALL_PUPILS])];
+        const likeCount = likesFor(event);
+        if (likeCount > 0) {
+          await tx.eventLike.createMany({
+            data: likers
+              .slice(0, likeCount)
+              .map((userId) => ({ eventId: id, userId, createdAt })),
+          });
+        }
       }
     });
 
-    const [users, events, votes] = await Promise.all([
+    const [users, events, votes, likes] = await Promise.all([
       prisma.user.count({
         where: {
           OR: [
@@ -931,8 +1024,11 @@ async function main(): Promise<void> {
       prisma.eventVote.count({
         where: { voter: { schoolsById: { startsWith: 'seed-' } } },
       }),
+      prisma.eventLike.count({
+        where: { user: { schoolsById: { startsWith: 'seed-' } } },
+      }),
     ]);
-    console.log(`Seeded ${users} users, ${votes} votes, events by status:`);
+    console.log(`Seeded ${users} users, ${votes} votes, ${likes} likes, events by status:`);
     for (const row of events)
       console.log(`  ${row.status.padEnd(20)} ${row._count}`);
   } finally {
