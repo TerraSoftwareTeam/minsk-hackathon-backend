@@ -73,6 +73,7 @@ describe('EventsService', () => {
       updateMany: jest.Mock;
     };
     eventVote: { create: jest.Mock; count: jest.Mock };
+    eventRating: { groupBy: jest.Mock; upsert: jest.Mock; update: jest.Mock };
     $transaction: jest.Mock;
   };
   let images: { uploadImage: jest.Mock; deleteImage: jest.Mock };
@@ -96,6 +97,11 @@ describe('EventsService', () => {
       eventVote: {
         create: jest.fn(),
         count: jest.fn(),
+      },
+      eventRating: {
+        groupBy: jest.fn().mockResolvedValue([]),
+        upsert: jest.fn().mockResolvedValue({}),
+        update: jest.fn().mockResolvedValue({}),
       },
       $transaction: jest.fn((fn: (client: typeof tx) => unknown) => fn(tx)),
     };
@@ -928,6 +934,128 @@ describe('EventsService', () => {
       images.deleteImage.mockRejectedValue(new Error('cloudinary down'));
 
       await expect(service.setImage(pupil, 'event-1', upload)).resolves.toBeDefined();
+    });
+  });
+
+  describe('rating', () => {
+    beforeEach(() => {
+      prisma.event.findUnique.mockResolvedValue({ status: EventStatuses.ON_VOTE });
+      prisma.eventRating.groupBy.mockResolvedValue([
+        { eventId: 'event-1', _avg: { stars: 13 / 3 }, _count: { _all: 3 } },
+      ]);
+    });
+
+    it('a pupil rates an ON_VOTE event', async () => {
+      const result = await service.rate(otherPupil, 'event-1', 5);
+
+      expect(prisma.event.findUnique).toHaveBeenCalledWith({ where: { id: 'event-1' }, select: { status: true } });
+      expect(prisma.eventRating.upsert).toHaveBeenCalledWith({
+        where: { eventId_raterId: { eventId: 'event-1', raterId: otherPupil.id } },
+        create: { eventId: 'event-1', raterId: otherPupil.id, stars: 5 },
+        update: { stars: 5 },
+      });
+      expect(result).toEqual({ eventId: 'event-1', stars: 5, ratingAverage: 4.33, ratingsCount: 3 });
+    });
+
+    it.each([
+      EventStatuses.ON_VOTE,
+      EventStatuses.ON_ADMIN_MODERATION,
+      EventStatuses.FINALIZED,
+      EventStatuses.DECLINED_BY_ADMIN,
+    ])('%s can be rated', async (status) => {
+      prisma.event.findUnique.mockResolvedValue({ status });
+      await expect(service.rate(otherPupil, 'event-1', 3)).resolves.toBeDefined();
+    });
+
+    it('a pupil of any class rates, the scope does not matter', async () => {
+      await expect(service.rate({ ...otherPupil, class: '5B' }, 'event-1', 5)).resolves.toBeDefined();
+      await expect(service.rate({ ...otherPupil, class: null }, 'event-1', 5)).resolves.toBeDefined();
+    });
+
+    it('the author may rate their own event too', async () => {
+      await expect(service.rate(pupil, 'event-1', 4)).resolves.toBeDefined();
+    });
+
+    it('a concurrent first rating of the same pupil turns into an update', async () => {
+      prisma.eventRating.upsert.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: 'test' }),
+      );
+      await service.rate(otherPupil, 'event-1', 2);
+      expect(prisma.eventRating.update).toHaveBeenCalledWith({
+        where: { eventId_raterId: { eventId: 'event-1', raterId: otherPupil.id } },
+        data: { stars: 2 },
+      });
+    });
+
+    it.each([['teacher', teacher], ['admin', admin]])('%s cannot rate', async (_name, actor) => {
+      await expect(service.rate(actor, 'event-1', 5)).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.eventRating.upsert).not.toHaveBeenCalled();
+    });
+
+    it.each([EventStatuses.ON_MODERATION, EventStatuses.DECLINED, EventStatuses.EXPIRED])(
+      'Conflict when the event is %s',
+      async (status) => {
+        prisma.event.findUnique.mockResolvedValue({ status });
+        await expect(service.rate(otherPupil, 'event-1', 5)).rejects.toBeInstanceOf(ConflictException);
+        expect(prisma.eventRating.upsert).not.toHaveBeenCalled();
+      },
+    );
+
+    it('NotFound for an unknown event', async () => {
+      prisma.event.findUnique.mockResolvedValue(null);
+      await expect(service.rate(otherPupil, 'event-1', 5)).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('rating feed: ratable events of every class and scope with the own rating', async () => {
+      prisma.event.findMany.mockImplementation((args: { include?: { ratings?: unknown } }) =>
+        args.include?.ratings
+          ? Promise.resolve([
+              { ...storedEvent({ status: EventStatuses.ON_VOTE }), ratings: [{ stars: 4 }] },
+              {
+                ...storedEvent({ id: 'event-2', status: EventStatuses.FINALIZED, initiator: { ...pupil, class: '11B' } }),
+                ratings: [],
+              },
+            ])
+          : Promise.resolve([]),
+      );
+
+      const result = await service.findForRating({ ...otherPupil, class: '5A' });
+
+      expect(prisma.event.findMany.mock.calls[0][0]).toMatchObject({
+        where: {
+          status: {
+            in: [
+              EventStatuses.ON_VOTE,
+              EventStatuses.ON_ADMIN_MODERATION,
+              EventStatuses.FINALIZED,
+              EventStatuses.DECLINED_BY_ADMIN,
+            ],
+          },
+        },
+        include: { ratings: { where: { raterId: otherPupil.id }, select: { stars: true } } },
+        orderBy: { createdAt: 'desc' },
+      });
+      // No scope filter: a 5th-grader sees a CLASS event of 10A and an event of 11B.
+      expect(result.map((e) => [e.id, e.myRating, e.ratingAverage, e.ratingsCount])).toEqual([
+        ['event-1', 4, 4.33, 3],
+        ['event-2', null, null, 0],
+      ]);
+    });
+
+    it.each([['teacher', teacher], ['admin', admin]])('%s has no rating feed', async (_name, actor) => {
+      await expect(service.findForRating(actor)).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('every event response carries its rating', async () => {
+      prisma.event.findUnique.mockResolvedValue(storedEvent());
+      const result = await service.findOne(admin, 'event-1');
+      expect(prisma.eventRating.groupBy).toHaveBeenCalledWith({
+        by: ['eventId'],
+        where: { eventId: { in: ['event-1'] } },
+        _avg: { stars: true },
+        _count: { _all: true },
+      });
+      expect([result.ratingAverage, result.ratingsCount]).toEqual([4.33, 3]);
     });
   });
 });

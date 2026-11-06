@@ -20,7 +20,8 @@ model Event {
   teacher   User   @relation("EventTeacher", fields: [teacherId], references: [id])
   teacherId String
 
-  votes EventVote[]
+  votes   EventVote[]
+  ratings EventRating[]
 
   /// Optional picture: at most one per event (unique). Deleting the image clears it.
   image   Image?  @relation("EventImage", fields: [imageId], references: [id], onDelete: SetNull)

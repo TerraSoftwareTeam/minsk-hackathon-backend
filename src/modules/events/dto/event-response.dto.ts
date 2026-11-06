@@ -79,6 +79,23 @@ export class EventResponseDto {
   })
   imageUrl!: string | null;
 
+  @ApiProperty({
+    example: 4.33,
+    nullable: true,
+    type: Number,
+    minimum: 1,
+    maximum: 5,
+    description: 'Average stars (1..5, 2 decimals) of the pupils who rated the event; null until the first rating',
+  })
+  ratingAverage!: number | null;
+
+  @ApiProperty({
+    type: 'integer',
+    example: 3,
+    description: 'Number of ratings. Any pupil may rate an event from ON_VOTE on',
+  })
+  ratingsCount!: number;
+
   @ApiProperty({ type: UserResponseDto, description: 'Pupil who created the event' })
   initiator!: UserResponseDto;
 

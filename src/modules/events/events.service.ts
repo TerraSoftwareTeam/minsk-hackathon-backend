@@ -34,7 +34,28 @@ import {
   computeSuccessProbability,
 } from './event-probability';
 import { DecisionStatus, EventModerationNotifier } from './event-moderation.notifier';
-import { EventWithUsers, toEventResponse, toVotingEventResponse } from './event.mapper';
+import { EventRatingResponseDto } from './dto/event-rating-response.dto';
+import { RatingEventResponseDto } from './dto/rating-event-response.dto';
+import {
+  EventComputed,
+  EventRatingSummary,
+  EventWithUsers,
+  toEventResponse,
+  toRatingEventResponse,
+  toVotingEventResponse,
+} from './event.mapper';
+
+/**
+ * Statuses in which pupils may rate an event: approved by the teacher (ON_VOTE)
+ * and every status after it. EXPIRED is left out: it is also reached straight
+ * from ON_MODERATION, without the teacher's approval.
+ */
+export const RATABLE_STATUSES = [
+  EventStatuses.ON_VOTE,
+  EventStatuses.ON_ADMIN_MODERATION,
+  EventStatuses.FINALIZED,
+  EventStatuses.DECLINED_BY_ADMIN,
+] as const;
 
 const WITH_USERS = { initiator: true, teacher: true, image: { select: { url: true } } } as const;
 
@@ -101,6 +122,11 @@ const ADMIN_MODERATION: ModerationStage = {
  * event is assigned to them (1), every admin when an event reaches
  * ON_ADMIN_MODERATION (4), the author on every decision of the teacher (2) and
  * of an admin (5). Sent after the change is committed.
+ *
+ * Rating: from ON_VOTE on (RATABLE_STATUSES) any pupil, not only the event's
+ * audience, may rate the event with 1 to 5 stars, one rating per pupil, which
+ * they can change. Every event response carries the
+ * average and the count.
  *
  * Image (optional, at most one per event): the author sets, replaces or
  * removes it until the event is decided, i.e. while it is pending and not past
@@ -223,6 +249,22 @@ export class EventsService {
     );
   }
 
+  /**
+   * Pupil's rating feed: every event in a RATABLE_STATUSES status, of any
+   * class and scope, newest first, with the pupil's own rating.
+   */
+  async findForRating(actor: User): Promise<RatingEventResponseDto[]> {
+    if (actor.role !== UserRoles.PUPIL) {
+      throw new ForbiddenException('Only a pupil has a rating list');
+    }
+    const events = await this.prisma.event.findMany({
+      where: { status: { in: [...RATABLE_STATUSES] } },
+      include: { ...WITH_USERS, ratings: { where: { raterId: actor.id }, select: { stars: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+    return this.toResponses(events, toRatingEventResponse);
+  }
+
   /** Admin queue: events that passed the vote and await an admin decision, oldest first. */
   async findForAdminModeration(actor: User): Promise<EventResponseDto[]> {
     if (actor.role !== UserRoles.ADMIN) {
@@ -312,6 +354,43 @@ export class EventsService {
     return result;
   }
 
+  /**
+   * Any pupil rates an event in a RATABLE_STATUSES status, whatever its scope.
+   * A second call changes the pupil's rating, it never adds another one.
+   */
+  async rate(actor: User, id: string, stars: number): Promise<EventRatingResponseDto> {
+    if (actor.role !== UserRoles.PUPIL) {
+      throw new ForbiddenException('Only a pupil can rate an event');
+    }
+    const event = await this.prisma.event.findUnique({ where: { id }, select: { status: true } });
+    if (!event) {
+      throw new NotFoundException('Event not found');
+    }
+    if (!(RATABLE_STATUSES as readonly EventStatuses[]).includes(event.status)) {
+      throw new ConflictException(
+        `The event can be rated once the teacher has approved it, its status is ${event.status}`,
+      );
+    }
+
+    const key = { eventId_raterId: { eventId: id, raterId: actor.id } };
+    try {
+      await this.prisma.eventRating.upsert({
+        where: key,
+        create: { eventId: id, raterId: actor.id, stars },
+        update: { stars },
+      });
+    } catch (error) {
+      // Two first ratings of the same pupil at once: the other one created the row.
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        await this.prisma.eventRating.update({ where: key, data: { stars } });
+      } else {
+        throw error;
+      }
+    }
+    const summary = (await this.loadRatings([id])).get(id)!;
+    return { eventId: id, stars, ratingAverage: summary.average!, ratingsCount: summary.count };
+  }
+
   /** Sets or replaces the event image. The previous image is deleted. */
   async setImage(actor: User, id: string, file: Express.Multer.File): Promise<EventResponseDto> {
     const event = await this.findEventOrThrow(id);
@@ -397,18 +476,45 @@ export class EventsService {
     return response;
   }
 
-  /** Maps events with their success probability, loading the history once for all of them. */
+  /** Maps events with their success probability and rating, loading them once for all of the events. */
   private async toResponses<E extends EventWithUsers, R>(
     events: E[],
-    map: (event: E, successProbability: number) => R,
+    map: (event: E, computed: EventComputed) => R,
   ): Promise<R[]> {
     if (events.length === 0) {
       return [];
     }
-    const history = await this.loadHistory(events);
+    const [history, ratings] = await Promise.all([
+      this.loadHistory(events),
+      this.loadRatings(events.map((event) => event.id)),
+    ]);
     return events.map((event) =>
-      map(event, computeSuccessProbability(event.category, event.startsAt, history, event.id)),
+      map(event, {
+        successProbability: computeSuccessProbability(event.category, event.startsAt, history, event.id),
+        rating: ratings.get(event.id)!,
+      }),
     );
+  }
+
+  /** Average stars (2 decimals, null without ratings) and the number of ratings of each event. */
+  private async loadRatings(eventIds: string[]): Promise<Map<string, EventRatingSummary>> {
+    const groups = await this.prisma.eventRating.groupBy({
+      by: ['eventId'],
+      where: { eventId: { in: eventIds } },
+      _avg: { stars: true },
+      _count: { _all: true },
+    });
+    const summaries = new Map<string, EventRatingSummary>(
+      eventIds.map((id) => [id, { average: null, count: 0 }]),
+    );
+    for (const group of groups) {
+      const average = group._avg.stars;
+      summaries.set(group.eventId, {
+        average: average === null ? null : Math.round(average * 100) / 100,
+        count: group._count._all,
+      });
+    }
+    return summaries;
   }
 
   /**
