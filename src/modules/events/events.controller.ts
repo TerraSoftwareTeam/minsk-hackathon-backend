@@ -28,6 +28,7 @@ import { JwtAuthGuard } from '../../common/auth/jwt-auth.guard';
 import { CreateEventDto } from './dto/create-event.dto';
 import { DeclineEventDto } from './dto/decline-event.dto';
 import { EventResponseDto } from './dto/event-response.dto';
+import { EventVoteResponseDto } from './dto/event-vote-response.dto';
 import { EventsService } from './events.service';
 
 @ApiTags('Events')
@@ -114,5 +115,23 @@ export class EventsController {
     @Body() dto: DeclineEventDto,
   ): Promise<EventResponseDto> {
     return this.eventsService.decline(actor, id, dto);
+  }
+
+  @Post(':id/vote')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Vote for an event',
+    description:
+      "Pupil only. The event must be ON_VOTE. One vote per pupil per event. Audience by scope, relative to the initiator's class: CLASS - same class, GRADE - same grade (first number of the class name), SCHOOL - any pupil.",
+  })
+  @ApiOkResponse({ type: EventVoteResponseDto })
+  @ApiForbiddenResponse({ description: "Caller is not a pupil, or is outside the event's scope" })
+  @ApiNotFoundResponse({ description: 'Event not found' })
+  @ApiConflictResponse({ description: 'Event is not on vote, or the pupil has already voted' })
+  vote(
+    @CurrentUser() actor: User,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<EventVoteResponseDto> {
+    return this.eventsService.vote(actor, id);
   }
 }

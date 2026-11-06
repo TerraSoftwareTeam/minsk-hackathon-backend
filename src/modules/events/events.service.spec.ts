@@ -58,6 +58,7 @@ describe('EventsService', () => {
       findUnique: jest.Mock;
       updateMany: jest.Mock;
     };
+    eventVote: { create: jest.Mock; count: jest.Mock };
   };
 
   beforeEach(() => {
@@ -68,6 +69,10 @@ describe('EventsService', () => {
         findMany: jest.fn().mockResolvedValue([storedEvent()]),
         findUnique: jest.fn().mockResolvedValue(storedEvent()),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      eventVote: {
+        create: jest.fn().mockResolvedValue({}),
+        count: jest.fn().mockResolvedValue(1),
       },
     };
     service = new EventsService(prisma as unknown as PrismaService);
@@ -218,6 +223,90 @@ describe('EventsService', () => {
     it('Conflict when a concurrent request moderated it first', async () => {
       prisma.event.updateMany.mockResolvedValue({ count: 0 });
       await expect(service.approve(teacher, 'event-1')).rejects.toBeInstanceOf(ConflictException);
+    });
+  });
+
+  describe('vote', () => {
+    beforeEach(() => {
+      prisma.event.findUnique.mockResolvedValue(voteTarget(Scopes.SCHOOL));
+    });
+
+    const voteTarget = (scope: Scopes, initiatorClass: string | null = '10A') => ({
+      status: EventStatuses.ON_VOTE,
+      scope,
+      initiator: { class: initiatorClass },
+    });
+
+    it.each([
+      [Scopes.CLASS, '10A', '10A'],
+      [Scopes.GRADE, '10A', '10Б'],
+      [Scopes.GRADE, '10 A', '10-В'],
+      [Scopes.SCHOOL, '10A', '5A'],
+      [Scopes.SCHOOL, '10A', null],
+    ])('%s event from %s: pupil of %s can vote', async (scope, initiatorClass, voterClass) => {
+      prisma.event.findUnique.mockResolvedValue(voteTarget(scope, initiatorClass));
+      await expect(
+        service.vote({ ...otherPupil, class: voterClass }, 'event-1'),
+      ).resolves.toBeDefined();
+    });
+
+    it.each([
+      [Scopes.CLASS, '10A', '10B'],
+      [Scopes.CLASS, '10A', null],
+      [Scopes.GRADE, '10A', '11A'],
+      [Scopes.GRADE, '1A', '11A'],
+      [Scopes.GRADE, '10A', null],
+      [Scopes.GRADE, 'A', 'B'],
+    ])('%s event from %s: pupil of %s cannot vote', async (scope, initiatorClass, voterClass) => {
+      prisma.event.findUnique.mockResolvedValue(voteTarget(scope, initiatorClass));
+      await expect(
+        service.vote({ ...otherPupil, class: voterClass }, 'event-1'),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.eventVote.create).not.toHaveBeenCalled();
+    });
+
+    it('pupil votes for an ON_VOTE event and gets the vote count', async () => {
+      prisma.eventVote.count.mockResolvedValue(3);
+
+      const result = await service.vote(otherPupil, 'event-1');
+
+      expect(prisma.eventVote.create).toHaveBeenCalledWith({
+        data: { eventId: 'event-1', voterId: otherPupil.id },
+      });
+      expect(result).toEqual({ eventId: 'event-1', votesCount: 3 });
+    });
+
+    it.each([
+      ['teacher', teacher],
+      ['admin', admin],
+    ])('%s cannot vote', async (_name, actor) => {
+      await expect(service.vote(actor, 'event-1')).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.eventVote.create).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      EventStatuses.ON_MODERATION,
+      EventStatuses.DECLINED,
+      EventStatuses.FINALIZED,
+    ])('Conflict when the event is %s', async (status) => {
+      prisma.event.findUnique.mockResolvedValue({ ...voteTarget(Scopes.SCHOOL), status });
+      await expect(service.vote(pupil, 'event-1')).rejects.toBeInstanceOf(ConflictException);
+      expect(prisma.eventVote.create).not.toHaveBeenCalled();
+    });
+
+    it('404 for a missing event', async () => {
+      prisma.event.findUnique.mockResolvedValue(null);
+      await expect(service.vote(pupil, 'missing')).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('Conflict on a second vote by the same pupil', async () => {
+      prisma.eventVote.create.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+          code: 'P2002',
+          clientVersion: 'test',
+        }),
+      );
+      await expect(service.vote(pupil, 'event-1')).rejects.toBeInstanceOf(ConflictException);
     });
   });
 });
