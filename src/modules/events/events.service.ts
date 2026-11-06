@@ -352,6 +352,37 @@ export class EventsService {
   }
 
   /**
+   * A pupil takes their vote back (unsubscribes from the event): -1 to the count.
+   * Only while the event is ON_VOTE and voting is open: once a vote has moved the
+   * event on to the admin, the votes that got it there stay.
+   */
+  async unvote(actor: User, id: string): Promise<EventVoteResponseDto> {
+    if (actor.role !== UserRoles.PUPIL) {
+      throw new ForbiddenException('Only a pupil can vote for an event');
+    }
+    return this.prisma.$transaction(async (tx) => {
+      // The same row lock as castVote: a concurrent vote cannot move the event on
+      // to the admin while this vote is being taken back.
+      const locked = await this.lockForVoting(tx, id);
+      this.assertVotingOpen(locked);
+
+      const { count } = await tx.eventVote.deleteMany({
+        where: { eventId: id, voterId: actor.id },
+      });
+      if (count === 0) {
+        throw new ConflictException('You have not voted for this event');
+      }
+      const votesCount = await tx.eventVote.count({ where: { eventId: id } });
+      return {
+        eventId: id,
+        votesCount,
+        voteThreshold: locked.voteThreshold,
+        status: EventStatuses.ON_VOTE,
+      };
+    });
+  }
+
+  /**
    * Any pupil likes an event in a LIKABLE_STATUSES status, whatever its scope:
    * +1 to its count. A second like by the same pupil changes nothing.
    */
@@ -572,6 +603,21 @@ export class EventsService {
     }
   }
 
+  /** Locks the event row until the end of the transaction, so votes on it are serialized. */
+  private async lockForVoting(
+    tx: Prisma.TransactionClient,
+    eventId: string,
+  ): Promise<{ status: EventStatuses; voteThreshold: number; createdAt: Date }> {
+    const [locked] = await tx.$queryRaw<
+      { status: EventStatuses; voteThreshold: number; createdAt: Date }[]
+    >`
+      SELECT "status", "voteThreshold", "createdAt" FROM "Event" WHERE "id" = ${eventId} FOR UPDATE`;
+    if (!locked) {
+      throw new NotFoundException('Event not found');
+    }
+    return locked;
+  }
+
   /**
    * Locks the event row, so votes for one event are applied one at a time:
    * the threshold transition happens exactly once, and no vote is accepted
@@ -582,13 +628,7 @@ export class EventsService {
     eventId: string,
     voterId: string,
   ): Promise<EventVoteResponseDto> {
-    const [locked] = await tx.$queryRaw<
-      { status: EventStatuses; voteThreshold: number; createdAt: Date }[]
-    >`
-      SELECT "status", "voteThreshold", "createdAt" FROM "Event" WHERE "id" = ${eventId} FOR UPDATE`;
-    if (!locked) {
-      throw new NotFoundException('Event not found');
-    }
+    const locked = await this.lockForVoting(tx, eventId);
     this.assertVotingOpen(locked);
 
     await tx.eventVote.create({ data: { eventId, voterId } });

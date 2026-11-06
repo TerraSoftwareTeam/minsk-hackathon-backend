@@ -82,7 +82,7 @@ describe('EventsService', () => {
   // Client used inside prisma.$transaction(fn).
   let tx: {
     $queryRaw: jest.Mock;
-    eventVote: { create: jest.Mock; count: jest.Mock };
+    eventVote: { create: jest.Mock; count: jest.Mock; deleteMany: jest.Mock };
     event: { update: jest.Mock };
   };
 
@@ -114,6 +114,7 @@ describe('EventsService', () => {
       eventVote: {
         create: jest.fn().mockResolvedValue({}),
         count: jest.fn().mockResolvedValue(1),
+        deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       event: { update: jest.fn().mockResolvedValue({}) },
     };
@@ -977,6 +978,73 @@ describe('EventsService', () => {
       images.deleteImage.mockRejectedValue(new Error('cloudinary down'));
 
       await expect(service.setImage(pupil, 'event-1', upload)).resolves.toBeDefined();
+    });
+  });
+
+  describe('unvote', () => {
+    it('pupil takes the vote back and gets the new count', async () => {
+      tx.eventVote.count.mockResolvedValue(4);
+
+      const result = await service.unvote(pupil, 'event-1');
+
+      expect(tx.eventVote.deleteMany).toHaveBeenCalledWith({
+        where: { eventId: 'event-1', voterId: pupil.id },
+      });
+      expect(tx.event.update).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        eventId: 'event-1',
+        votesCount: 4,
+        voteThreshold: 10,
+        status: EventStatuses.ON_VOTE,
+      });
+    });
+
+    it('locks the event row before deleting, like a vote does', async () => {
+      await service.unvote(pupil, 'event-1');
+
+      expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+        tx.eventVote.deleteMany.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('Conflict when the pupil has not voted', async () => {
+      tx.eventVote.deleteMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.unvote(pupil, 'event-1')).rejects.toBeInstanceOf(ConflictException);
+      expect(tx.eventVote.count).not.toHaveBeenCalled();
+    });
+
+    it.each([EventStatuses.ON_ADMIN_MODERATION, EventStatuses.FINALIZED, EventStatuses.EXPIRED])(
+      'Conflict, no vote removed, when the event is %s',
+      async (status) => {
+        tx.$queryRaw.mockResolvedValue([{ status, voteThreshold: 10, createdAt: RECENT }]);
+
+        await expect(service.unvote(pupil, 'event-1')).rejects.toBeInstanceOf(ConflictException);
+        expect(tx.eventVote.deleteMany).not.toHaveBeenCalled();
+      },
+    );
+
+    it('Conflict, no vote removed, when voting has closed (a month after the creation)', async () => {
+      tx.$queryRaw.mockResolvedValue([
+        { status: EventStatuses.ON_VOTE, voteThreshold: 10, createdAt: OVERDUE },
+      ]);
+
+      await expect(service.unvote(pupil, 'event-1')).rejects.toBeInstanceOf(ConflictException);
+      expect(tx.eventVote.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('NotFound when the event does not exist', async () => {
+      tx.$queryRaw.mockResolvedValue([]);
+
+      await expect(service.unvote(pupil, 'event-1')).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it.each([
+      ['teacher', teacher],
+      ['admin', admin],
+    ])('%s: Forbidden, no transaction', async (_name, actor) => {
+      await expect(service.unvote(actor, 'event-1')).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
   });
 

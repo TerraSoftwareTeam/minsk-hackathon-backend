@@ -8,7 +8,7 @@ export class EventVoteResponseDto {
   @ApiProperty({
     type: 'integer',
     example: 12,
-    description: 'Total number of votes for the event after this vote',
+    description: 'Total number of votes for the event after this vote (or after it was taken back)',
   })
   votesCount!: number;
 

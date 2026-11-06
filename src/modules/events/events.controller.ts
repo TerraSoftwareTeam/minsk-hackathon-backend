@@ -361,6 +361,28 @@ export class EventsController {
     return this.eventsService.vote(actor, id);
   }
 
+  @Delete(':id/vote')
+  @ApiOperation({
+    summary: 'Take the vote back (unsubscribe from the event)',
+    description:
+      'Pupil only, and only the pupil who voted. The event must still be ON_VOTE and voting must be open ' +
+      '(until a month after the event was created): once the threshold has moved the event to ON_ADMIN_MODERATION, ' +
+      'its votes stay. The pupil can vote again afterwards.',
+  })
+  @ApiUuidParam()
+  @ApiOkResponse({ type: EventVoteResponseDto })
+  @ApiForbiddenResponse({ description: 'Caller is not a pupil' })
+  @ApiNotFoundResponse({ description: 'Event not found' })
+  @ApiConflictResponse({
+    description: 'Event is not on vote, voting has closed, or the pupil has not voted for it',
+  })
+  unvote(
+    @CurrentUser() actor: User,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<EventVoteResponseDto> {
+    return this.eventsService.unvote(actor, id);
+  }
+
   @Put(':id/like')
   @ApiOperation({
     summary: 'Like an event (+1)',
