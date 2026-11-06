@@ -18,7 +18,7 @@ export class EventResponseDto {
   @ApiProperty({ enum: EventStatuses, example: EventStatuses.ON_MODERATION })
   status!: EventStatuses;
 
-  @ApiProperty({ example: null, nullable: true, type: String, description: 'Set when declined with a reason' })
+  @ApiProperty({ example: null, nullable: true, type: String, description: 'Set when declined (by the teacher or an admin) with a reason' })
   declineReason!: string | null;
 
   @ApiProperty({ example: 15, description: 'Votes needed to move from ON_VOTE to ON_ADMIN_MODERATION' })

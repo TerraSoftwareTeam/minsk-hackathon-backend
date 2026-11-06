@@ -54,7 +54,7 @@ export class EventsController {
     return this.eventsService.create(actor, dto);
   }
 
-  // Declared before ':id' so "moderation" is not parsed as an id.
+  // Declared before ':id' so "moderation" / "admin-moderation" are not parsed as an id.
   @Get('moderation')
   @ApiOperation({
     summary: "Teacher's moderation list",
@@ -64,6 +64,18 @@ export class EventsController {
   @ApiForbiddenResponse({ description: 'Caller is not a teacher' })
   findForModeration(@CurrentUser() actor: User): Promise<EventResponseDto[]> {
     return this.eventsService.findForModeration(actor);
+  }
+
+  @Get('admin-moderation')
+  @ApiOperation({
+    summary: "Admin's moderation list",
+    description:
+      'Admin only. Events with status ON_ADMIN_MODERATION (passed the vote), oldest first.',
+  })
+  @ApiOkResponse({ type: [EventResponseDto] })
+  @ApiForbiddenResponse({ description: 'Caller is not an admin' })
+  findForAdminModeration(@CurrentUser() actor: User): Promise<EventResponseDto[]> {
+    return this.eventsService.findForAdminModeration(actor);
   }
 
   @Get(':id')
@@ -115,6 +127,42 @@ export class EventsController {
     @Body() dto: DeclineEventDto,
   ): Promise<EventResponseDto> {
     return this.eventsService.decline(actor, id, dto);
+  }
+
+  @Post(':id/admin/approve')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Admin approves an event',
+    description: 'Admin only. ON_ADMIN_MODERATION -> FINALIZED.',
+  })
+  @ApiOkResponse({ type: EventResponseDto })
+  @ApiForbiddenResponse({ description: 'Caller is not an admin' })
+  @ApiNotFoundResponse({ description: 'Event not found' })
+  @ApiConflictResponse({ description: 'Event is not on admin moderation' })
+  adminApprove(
+    @CurrentUser() actor: User,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<EventResponseDto> {
+    return this.eventsService.adminApprove(actor, id);
+  }
+
+  @Post(':id/admin/decline')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Admin declines an event',
+    description: 'Admin only. ON_ADMIN_MODERATION -> DECLINED_BY_ADMIN, with an optional reason.',
+  })
+  @ApiBody({ type: DeclineEventDto, required: false })
+  @ApiOkResponse({ type: EventResponseDto })
+  @ApiForbiddenResponse({ description: 'Caller is not an admin' })
+  @ApiNotFoundResponse({ description: 'Event not found' })
+  @ApiConflictResponse({ description: 'Event is not on admin moderation' })
+  adminDecline(
+    @CurrentUser() actor: User,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: DeclineEventDto,
+  ): Promise<EventResponseDto> {
+    return this.eventsService.adminDecline(actor, id, dto);
   }
 
   @Post(':id/vote')

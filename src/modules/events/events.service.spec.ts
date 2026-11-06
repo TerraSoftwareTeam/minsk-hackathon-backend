@@ -201,7 +201,7 @@ describe('EventsService', () => {
       const result = await service.approve(teacher, 'event-1');
 
       expect(prisma.event.updateMany).toHaveBeenCalledWith({
-        where: { id: 'event-1', teacherId: teacher.id, status: EventStatuses.ON_MODERATION },
+        where: { id: 'event-1', status: EventStatuses.ON_MODERATION },
         data: { status: EventStatuses.ON_VOTE },
       });
       expect(result.status).toBe(EventStatuses.ON_VOTE);
@@ -241,6 +241,96 @@ describe('EventsService', () => {
     it('Conflict when a concurrent request moderated it first', async () => {
       prisma.event.updateMany.mockResolvedValue({ count: 0 });
       await expect(service.approve(teacher, 'event-1')).rejects.toBeInstanceOf(ConflictException);
+    });
+  });
+
+  describe('admin moderation', () => {
+    const onAdminModeration = () => storedEvent({ status: EventStatuses.ON_ADMIN_MODERATION });
+
+    beforeEach(() => {
+      prisma.event.findUnique.mockResolvedValue(onAdminModeration());
+    });
+
+    it('lists ON_ADMIN_MODERATION events of all classes, oldest first', async () => {
+      await service.findForAdminModeration(admin);
+
+      expect(prisma.event.findMany).toHaveBeenCalledWith({
+        where: { status: EventStatuses.ON_ADMIN_MODERATION },
+        include: { initiator: true, teacher: true },
+        orderBy: { createdAt: 'asc' },
+      });
+    });
+
+    it.each([
+      ['teacher', teacher],
+      ['pupil', pupil],
+    ])('%s has no admin moderation list', async (_name, actor) => {
+      await expect(service.findForAdminModeration(actor)).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+    });
+
+    it('admin approves: ON_ADMIN_MODERATION -> FINALIZED', async () => {
+      prisma.event.findUnique
+        .mockResolvedValueOnce(onAdminModeration())
+        .mockResolvedValueOnce(storedEvent({ status: EventStatuses.FINALIZED }));
+
+      const result = await service.adminApprove(admin, 'event-1');
+
+      expect(prisma.event.updateMany).toHaveBeenCalledWith({
+        where: { id: 'event-1', status: EventStatuses.ON_ADMIN_MODERATION },
+        data: { status: EventStatuses.FINALIZED },
+      });
+      expect(result.status).toBe(EventStatuses.FINALIZED);
+    });
+
+    it('admin declines with a reason: -> DECLINED_BY_ADMIN', async () => {
+      await service.adminDecline(admin, 'event-1', { reason: 'Not this term' });
+      expect(prisma.event.updateMany.mock.calls[0][0].data).toEqual({
+        status: EventStatuses.DECLINED_BY_ADMIN,
+        declineReason: 'Not this term',
+      });
+    });
+
+    it('admin decline without a reason stores null', async () => {
+      await service.adminDecline(admin, 'event-1', {});
+      expect(prisma.event.updateMany.mock.calls[0][0].data.declineReason).toBeNull();
+    });
+
+    it.each([
+      ['assigned teacher', teacher],
+      ['initiator', pupil],
+    ])('%s cannot moderate as admin', async (_name, actor) => {
+      await expect(service.adminApprove(actor, 'event-1')).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      await expect(service.adminDecline(actor, 'event-1', {})).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      expect(prisma.event.updateMany).not.toHaveBeenCalled();
+    });
+
+    it.each([EventStatuses.ON_VOTE, EventStatuses.ON_MODERATION, EventStatuses.FINALIZED])(
+      'Conflict when the event is %s',
+      async (status) => {
+        prisma.event.findUnique.mockResolvedValue(storedEvent({ status }));
+        await expect(service.adminApprove(admin, 'event-1')).rejects.toBeInstanceOf(
+          ConflictException,
+        );
+        expect(prisma.event.updateMany).not.toHaveBeenCalled();
+      },
+    );
+
+    it('admin cannot do the teacher step', async () => {
+      prisma.event.findUnique.mockResolvedValue(storedEvent());
+      await expect(service.approve(admin, 'event-1')).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('Conflict when a concurrent admin decided first', async () => {
+      prisma.event.updateMany.mockResolvedValue({ count: 0 });
+      await expect(service.adminDecline(admin, 'event-1', {})).rejects.toBeInstanceOf(
+        ConflictException,
+      );
     });
   });
 

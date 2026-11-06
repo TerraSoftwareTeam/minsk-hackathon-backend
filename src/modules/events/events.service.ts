@@ -21,6 +21,25 @@ import { EventWithUsers, toEventResponse } from './event.mapper';
 
 const WITH_USERS = { initiator: true, teacher: true } as const;
 
+/** A moderation step: which status it decides on and who may decide. */
+type ModerationStage = {
+  from: EventStatuses;
+  mayModerate: (actor: User, event: EventWithUsers) => boolean;
+  forbiddenMessage: string;
+};
+
+const TEACHER_MODERATION: ModerationStage = {
+  from: EventStatuses.ON_MODERATION,
+  mayModerate: (actor, event) => actor.id === event.teacherId,
+  forbiddenMessage: 'Only the assigned teacher can moderate this event',
+};
+
+const ADMIN_MODERATION: ModerationStage = {
+  from: EventStatuses.ON_ADMIN_MODERATION,
+  mayModerate: (actor) => actor.role === UserRoles.ADMIN,
+  forbiddenMessage: 'Only an admin can moderate this event',
+};
+
 /**
  * Event moderation flow:
  * 1. A PUPIL creates an event. It gets status ON_MODERATION and is assigned
@@ -33,6 +52,8 @@ const WITH_USERS = { initiator: true, teacher: true } as const;
  *    SCHOOL - any pupil.
  * 4. When the votes reach the event's voteThreshold (set by the initiator),
  *    the event moves to ON_ADMIN_MODERATION and voting closes.
+ * 5. Any admin approves it (FINALIZED) or declines it (DECLINED_BY_ADMIN,
+ *    optional reason).
  *
  * Who may read an event: its initiator, its assigned teacher, any admin.
  */
@@ -79,6 +100,19 @@ export class EventsService {
     return events.map(toEventResponse);
   }
 
+  /** Admin queue: events that passed the vote and await an admin decision, oldest first. */
+  async findForAdminModeration(actor: User): Promise<EventResponseDto[]> {
+    if (actor.role !== UserRoles.ADMIN) {
+      throw new ForbiddenException('Only an admin has the admin moderation list');
+    }
+    const events = await this.prisma.event.findMany({
+      where: { status: EventStatuses.ON_ADMIN_MODERATION },
+      include: WITH_USERS,
+      orderBy: { createdAt: 'asc' },
+    });
+    return events.map(toEventResponse);
+  }
+
   async findOne(actor: User, id: string): Promise<EventResponseDto> {
     const event = await this.findEventOrThrow(id);
     if (!this.canRead(actor, event)) {
@@ -88,12 +122,27 @@ export class EventsService {
   }
 
   approve(actor: User, id: string): Promise<EventResponseDto> {
-    return this.moderate(actor, id, { status: EventStatuses.ON_VOTE });
+    return this.moderate(TEACHER_MODERATION, actor, id, {
+      status: EventStatuses.ON_VOTE,
+    });
   }
 
   decline(actor: User, id: string, dto: DeclineEventDto): Promise<EventResponseDto> {
-    return this.moderate(actor, id, {
+    return this.moderate(TEACHER_MODERATION, actor, id, {
       status: EventStatuses.DECLINED,
+      declineReason: dto.reason ?? null,
+    });
+  }
+
+  adminApprove(actor: User, id: string): Promise<EventResponseDto> {
+    return this.moderate(ADMIN_MODERATION, actor, id, {
+      status: EventStatuses.FINALIZED,
+    });
+  }
+
+  adminDecline(actor: User, id: string, dto: DeclineEventDto): Promise<EventResponseDto> {
+    return this.moderate(ADMIN_MODERATION, actor, id, {
+      status: EventStatuses.DECLINED_BY_ADMIN,
       declineReason: dto.reason ?? null,
     });
   }
@@ -182,24 +231,25 @@ export class EventsService {
     );
   }
 
-  /** Only the assigned teacher may decide, and only while the event is ON_MODERATION. */
+  /** Applies a moderation decision: only an allowed actor, only while the event is in `stage.from`. */
   private async moderate(
+    stage: ModerationStage,
     actor: User,
     id: string,
     data: Prisma.EventUpdateManyMutationInput,
   ): Promise<EventResponseDto> {
     const event = await this.findEventOrThrow(id);
-    if (actor.id !== event.teacherId) {
-      throw new ForbiddenException('Only the assigned teacher can moderate this event');
+    if (!stage.mayModerate(actor, event)) {
+      throw new ForbiddenException(stage.forbiddenMessage);
     }
-    if (event.status !== EventStatuses.ON_MODERATION) {
+    if (event.status !== stage.from) {
       throw new ConflictException(`Event is already ${event.status}`);
     }
 
     // The status condition makes the transition atomic: if two requests race,
     // only the first one changes the row, the second gets 409.
     const { count } = await this.prisma.event.updateMany({
-      where: { id, teacherId: actor.id, status: EventStatuses.ON_MODERATION },
+      where: { id, status: stage.from },
       data,
     });
     if (count === 0) {
