@@ -1,0 +1,12 @@
+model EventVote {
+  event   Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  eventId String
+
+  voter   User   @relation(fields: [voterId], references: [id], onDelete: Cascade)
+  voterId String
+
+  createdAt DateTime @default(now())
+
+  @@id([eventId, voterId])
+  @@index([voterId])
+}
