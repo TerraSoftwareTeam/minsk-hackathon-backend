@@ -5,7 +5,11 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, User, UserRoles } from '../../../prisma/generated/prisma/client';
+import {
+  Prisma,
+  User,
+  UserRoles,
+} from '../../../prisma/generated/prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UserResponseDto } from '../auth/dto/user-response.dto';
 import { toUserResponse } from '../auth/user.mapper';
@@ -27,8 +31,13 @@ import { UpdateUserDto } from './dto/update-user.dto';
 const PERSONAL_FIELDS = ['name', 'surname'] as const;
 const ADMIN_ONLY_FIELDS = ['role', 'class', 'schoolsById'] as const;
 
+type SchoolFieldsInput = {
+  schoolsById: string | null | undefined;
+  class: string | null;
+};
+
 type SchoolFields = {
-  schoolsById: string | null;
+  schoolsById: string;
   class: string | null;
 };
 
@@ -37,9 +46,12 @@ export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
 
   async create(actor: User, dto: CreateUserDto): Promise<UserResponseDto> {
-    const input = actor.role === UserRoles.ADMIN ? dto : this.teacherCreateInput(actor, dto);
+    const input =
+      actor.role === UserRoles.ADMIN
+        ? dto
+        : this.teacherCreateInput(actor, dto);
     const schoolFields = this.schoolFieldsFor(input.role, {
-      schoolsById: input.schoolsById ?? null,
+      schoolsById: input.schoolsById,
       class: input.class ?? null,
     });
 
@@ -69,7 +81,11 @@ export class UsersService {
     return toUserResponse(target);
   }
 
-  async update(actor: User, id: string, dto: UpdateUserDto): Promise<UserResponseDto> {
+  async update(
+    actor: User,
+    id: string,
+    dto: UpdateUserDto,
+  ): Promise<UserResponseDto> {
     const target = await this.findManageableOrThrow(actor, id);
     const data =
       actor.role === UserRoles.ADMIN
@@ -84,7 +100,9 @@ export class UsersService {
 
   async remove(actor: User, id: string): Promise<void> {
     const target = await this.findManageableOrThrow(actor, id);
-    await this.withPrismaErrors(() => this.prisma.user.delete({ where: { id: target.id } }));
+    await this.withPrismaErrors(() =>
+      this.prisma.user.delete({ where: { id: target.id } }),
+    );
   }
 
   // ---- access rules ----
@@ -93,7 +111,8 @@ export class UsersService {
   private canManage(actor: User, target: User): boolean {
     if (actor.role === UserRoles.ADMIN) return true;
     if (actor.id === target.id) return true;
-    if (actor.role === UserRoles.TEACHER) return this.isPupilOfTeacher(actor, target);
+    if (actor.role === UserRoles.TEACHER)
+      return this.isPupilOfTeacher(actor, target);
     return false;
   }
 
@@ -104,7 +123,9 @@ export class UsersService {
         return {};
       case UserRoles.TEACHER:
         if (!actor.class) return { id: actor.id };
-        return { OR: [{ id: actor.id }, { role: UserRoles.PUPIL, class: actor.class }] };
+        return {
+          OR: [{ id: actor.id }, { role: UserRoles.PUPIL, class: actor.class }],
+        };
       default:
         return { id: actor.id };
     }
@@ -121,7 +142,9 @@ export class UsersService {
   /** A teacher creates pupils of their own class only. */
   private teacherCreateInput(actor: User, dto: CreateUserDto): CreateUserDto {
     if (actor.role !== UserRoles.TEACHER) {
-      throw new ForbiddenException('Only an admin or a teacher can create users');
+      throw new ForbiddenException(
+        'Only an admin or a teacher can create users',
+      );
     }
     if (dto.role !== UserRoles.PUPIL) {
       throw new ForbiddenException('A teacher can only create pupils');
@@ -130,7 +153,9 @@ export class UsersService {
       throw new ForbiddenException('Teacher has no class assigned');
     }
     if (dto.class !== undefined && dto.class !== actor.class) {
-      throw new ForbiddenException('A teacher can only create pupils of their own class');
+      throw new ForbiddenException(
+        'A teacher can only create pupils of their own class',
+      );
     }
     return {
       schoolsById: dto.schoolsById,
@@ -142,14 +167,17 @@ export class UsersService {
   }
 
   /** Admin may change anything; school fields are re-validated against the resulting role. */
-  private adminUpdateData(target: User, dto: UpdateUserDto): Prisma.UserUpdateInput {
+  private adminUpdateData(
+    target: User,
+    dto: UpdateUserDto,
+  ): Prisma.UserUpdateInput {
     const role = dto.role ?? target.role;
-    // When turning a pupil/teacher into an admin the school fields are dropped,
-    // so stored values must not count as "provided".
-    const keepStored = role !== UserRoles.ADMIN;
+    // When turning a pupil/teacher into an admin the class is dropped,
+    // so the stored class must not count as "provided". schoolsById is kept for every role.
+    const keepStoredClass = role !== UserRoles.ADMIN;
     const schoolFields = this.schoolFieldsFor(role, {
-      schoolsById: dto.schoolsById ?? (keepStored ? target.schoolsById : null),
-      class: dto.class ?? (keepStored ? target.class : null),
+      schoolsById: dto.schoolsById ?? target.schoolsById,
+      class: dto.class ?? (keepStoredClass ? target.class : null),
     });
 
     return {
@@ -161,7 +189,10 @@ export class UsersService {
   }
 
   /** Pupils and teachers may change only personal fields. */
-  private personalUpdateData(target: User, dto: UpdateUserDto): Prisma.UserUpdateInput {
+  private personalUpdateData(
+    target: User,
+    dto: UpdateUserDto,
+  ): Prisma.UserUpdateInput {
     for (const field of ADMIN_ONLY_FIELDS) {
       const value = dto[field];
       // Sending the current value back unchanged is harmless (e.g. a form re-submit).
@@ -179,21 +210,33 @@ export class UsersService {
 
   /**
    * Validates school fields for a role and returns the values to store.
-   * ADMIN: must have none (stored as NULL). PUPIL/TEACHER: all are required.
+   * schoolsById: required for every role. class: required for PUPIL/TEACHER,
+   * forbidden for ADMIN (stored as NULL).
    */
-  private schoolFieldsFor(role: UserRoles, input: SchoolFields): SchoolFields {
+  private schoolFieldsFor(
+    role: UserRoles,
+    input: SchoolFieldsInput,
+  ): SchoolFields {
+    const { schoolsById } = input;
     if (role === UserRoles.ADMIN) {
-      if (input.schoolsById || input.class) {
-        throw new BadRequestException('An admin cannot have schoolsById or class');
+      if (input.class) {
+        throw new BadRequestException('An admin cannot have a class');
       }
-      return { schoolsById: null, class: null };
+      if (!schoolsById) {
+        throw new BadRequestException(`schoolsById required for ${role}`);
+      }
+      return { schoolsById, class: null };
     }
 
-    const missing = (['schoolsById', 'class'] as const).filter((f) => !input[f]);
-    if (missing.length > 0) {
-      throw new BadRequestException(`${missing.join(', ')} required for ${role}`);
+    const missing = (['schoolsById', 'class'] as const).filter(
+      (f) => !input[f],
+    );
+    if (!schoolsById || !input.class) {
+      throw new BadRequestException(
+        `${missing.join(', ')} required for ${role}`,
+      );
     }
-    return input;
+    return { schoolsById, class: input.class };
   }
 
   // ---- helpers ----
@@ -218,11 +261,15 @@ export class UsersService {
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError) {
         if (error.code === 'P2002') {
-          throw new ConflictException('User with this schoolsById already exists');
+          throw new ConflictException(
+            'User with this schoolsById already exists',
+          );
         }
         // Foreign key violation: the user is still referenced (e.g. as an event initiator).
         if (error.code === 'P2003') {
-          throw new ConflictException('User is referenced by other records and cannot be deleted');
+          throw new ConflictException(
+            'User is referenced by other records and cannot be deleted',
+          );
         }
         if (error.code === 'P2025') {
           throw new NotFoundException('User not found');

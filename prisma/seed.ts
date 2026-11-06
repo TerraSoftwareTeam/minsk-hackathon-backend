@@ -10,7 +10,7 @@
  * are recreated with dates relative to now, so pending events stay pending.
  *
  * Log in:
- *   ADMIN    { "role": "ADMIN",   "id": "00000000-0000-4000-8000-00000000a001" }
+ *   ADMIN    { "role": "ADMIN",   "schoolsById": "seed-admin-1" }   (1..2)
  *   TEACHER  { "role": "TEACHER", "schoolsById": "seed-teacher-10A" }
  *   PUPIL    { "role": "PUPIL",   "schoolsById": "seed-pupil-10A-1" }   (1..6, classes 8B 10A 10B 11A)
  */
@@ -53,11 +53,13 @@ function saturday(weeks: number, hhmm: string): Date {
 const ADMINS = [
   {
     id: '00000000-0000-4000-8000-00000000a001',
+    schoolsById: 'seed-admin-1',
     name: 'Ольга',
     surname: 'Ковалёва',
   },
   {
     id: '00000000-0000-4000-8000-00000000a002',
+    schoolsById: 'seed-admin-2',
     name: 'Дмитрий',
     surname: 'Жуков',
   },
@@ -771,7 +773,11 @@ function seedCreatedAt(event: SeedEvent, planned: Date, now: Date): Date {
   if (event.status === EXPIRED) {
     created = Math.min(created, now.getTime() - DECISION_WINDOW_MS - DAY_MS);
   }
-  if (([ON_MODERATION, ON_VOTE, ON_ADMIN_MODERATION] as EventStatuses[]).includes(event.status)) {
+  if (
+    ([ON_MODERATION, ON_VOTE, ON_ADMIN_MODERATION] as EventStatuses[]).includes(
+      event.status,
+    )
+  ) {
     created = Math.max(created, now.getTime() - DECISION_WINDOW_MS + DAY_MS);
   }
   return new Date(created);
@@ -825,7 +831,6 @@ async function main(): Promise<void> {
           update: {
             ...admin,
             role: UserRoles.ADMIN,
-            schoolsById: null,
             class: null,
           },
         });
@@ -844,9 +849,7 @@ async function main(): Promise<void> {
           create: { id: teacherId(cls), ...teacher },
           update: teacher,
         });
-        for (const [i, [pName, pSurname]] of CLASSES[
-          cls
-        ].pupils.entries()) {
+        for (const [i, [pName, pSurname]] of CLASSES[cls].pupils.entries()) {
           const pupil = {
             name: pName,
             surname: pSurname,

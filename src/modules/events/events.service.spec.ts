@@ -20,7 +20,7 @@ import { EventsService } from './events.service';
 
 const user = (over: Partial<User>): User => ({
   id: 'x',
-  schoolsById: null,
+  schoolsById: 'a1',
   name: 'N',
   surname: 'S',
   class: null,

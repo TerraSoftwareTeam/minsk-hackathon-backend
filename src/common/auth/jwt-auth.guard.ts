@@ -50,7 +50,9 @@ export class JwtAuthGuard implements CanActivate {
       throw new UnauthorizedException('User no longer exists');
     }
     if (!hasRequiredClass(user)) {
-      throw new ForbiddenException(`${user.role} has no class assigned, contact an admin`);
+      throw new ForbiddenException(
+        `${user.role} has no class assigned, contact an admin`,
+      );
     }
 
     request.user = user;

@@ -76,8 +76,14 @@ describe('AuthService.register', () => {
       });
       expect(prisma.user.create).not.toHaveBeenCalled();
       expect(prisma.user.findFirst).not.toHaveBeenCalled();
-      expect(jwt.signAsync).toHaveBeenCalledWith({ sub: 'u1', role: UserRoles.PUPIL });
-      expect(result).toEqual({ accessToken: 'signed.jwt.token', user: expectedUser });
+      expect(jwt.signAsync).toHaveBeenCalledWith({
+        sub: 'u1',
+        role: UserRoles.PUPIL,
+      });
+      expect(result).toEqual({
+        accessToken: 'signed.jwt.token',
+        user: expectedUser,
+      });
     });
 
     it('works with schoolsById only', async () => {
@@ -88,10 +94,32 @@ describe('AuthService.register', () => {
       expect(result.user).toEqual(expectedUser);
     });
 
+    it('logs an existing ADMIN in by schoolsById, no class required', async () => {
+      const storedAdmin = {
+        ...storedUser,
+        id: 'a1',
+        schoolsById: 'admin-1',
+        role: UserRoles.ADMIN,
+        class: null,
+      };
+      prisma.user.findUnique.mockResolvedValue(storedAdmin);
+
+      const result = await service.register({ schoolsById: 'admin-1' });
+
+      expect(prisma.user.create).not.toHaveBeenCalled();
+      expect(jwt.signAsync).toHaveBeenCalledWith({
+        sub: 'a1',
+        role: UserRoles.ADMIN,
+      });
+      expect(result.user).toEqual(storedAdmin);
+    });
+
     it('Forbidden when the stored pupil/teacher has no class, no token issued', async () => {
       prisma.user.findUnique.mockResolvedValue({ ...storedUser, class: null });
 
-      await expect(service.register(dto)).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(service.register(dto)).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
       expect(jwt.signAsync).not.toHaveBeenCalled();
     });
   });
@@ -103,8 +131,14 @@ describe('AuthService.register', () => {
       const result = await service.register(dto);
 
       expect(prisma.user.create).toHaveBeenCalledWith({ data: dto });
-      expect(jwt.signAsync).toHaveBeenCalledWith({ sub: 'u1', role: UserRoles.PUPIL });
-      expect(result).toEqual({ accessToken: 'signed.jwt.token', user: expectedUser });
+      expect(jwt.signAsync).toHaveBeenCalledWith({
+        sub: 'u1',
+        role: UserRoles.PUPIL,
+      });
+      expect(result).toEqual({
+        accessToken: 'signed.jwt.token',
+        user: expectedUser,
+      });
     });
 
     it('pupil: registers into a class that has no teacher yet, no events touched', async () => {
@@ -120,10 +154,18 @@ describe('AuthService.register', () => {
     });
 
     it('teacher: takes the events of their class created without a teacher', async () => {
-      prisma.user.create.mockResolvedValue({ ...storedUser, id: 't9', role: UserRoles.TEACHER });
+      prisma.user.create.mockResolvedValue({
+        ...storedUser,
+        id: 't9',
+        role: UserRoles.TEACHER,
+      });
       prisma.event.updateMany.mockResolvedValue({ count: 2 });
 
-      await service.register({ ...dto, schoolsById: 'school-user-9', role: UserRoles.TEACHER });
+      await service.register({
+        ...dto,
+        schoolsById: 'school-user-9',
+        role: UserRoles.TEACHER,
+      });
 
       expect(prisma.event.updateMany).toHaveBeenCalledWith({
         where: { teacherId: null, initiator: { class: '10A' } },
@@ -136,11 +178,19 @@ describe('AuthService.register', () => {
     });
 
     it('teacher: still registered when taking the events fails', async () => {
-      prisma.user.create.mockResolvedValue({ ...storedUser, id: 't9', role: UserRoles.TEACHER });
+      prisma.user.create.mockResolvedValue({
+        ...storedUser,
+        id: 't9',
+        role: UserRoles.TEACHER,
+      });
       prisma.event.updateMany.mockRejectedValue(new Error('db down'));
 
       await expect(
-        service.register({ ...dto, schoolsById: 'school-user-9', role: UserRoles.TEACHER }),
+        service.register({
+          ...dto,
+          schoolsById: 'school-user-9',
+          role: UserRoles.TEACHER,
+        }),
       ).resolves.toMatchObject({ accessToken: 'signed.jwt.token' });
     });
 
@@ -152,7 +202,10 @@ describe('AuthService.register', () => {
         role: UserRoles.TEACHER,
         class: '10A',
       };
-      prisma.user.create.mockResolvedValue({ ...storedUser, role: UserRoles.TEACHER });
+      prisma.user.create.mockResolvedValue({
+        ...storedUser,
+        role: UserRoles.TEACHER,
+      });
 
       await service.register(teacherDto);
 
@@ -165,7 +218,9 @@ describe('AuthService.register', () => {
       async (field) => {
         const partial: RegisterDto = { ...dto, [field]: undefined };
 
-        await expect(service.register(partial)).rejects.toBeInstanceOf(BadRequestException);
+        await expect(service.register(partial)).rejects.toBeInstanceOf(
+          BadRequestException,
+        );
         expect(prisma.user.create).not.toHaveBeenCalled();
       },
     );
@@ -180,20 +235,58 @@ describe('AuthService.register', () => {
       },
     );
 
-    it('BadRequest for role ADMIN, no user created', async () => {
-      await expect(
-        service.register({ ...dto, role: UserRoles.ADMIN }),
-      ).rejects.toBeInstanceOf(BadRequestException);
-      expect(prisma.user.create).not.toHaveBeenCalled();
+    describe('ADMIN', () => {
+      // A plain object (not typed as the DTO class), so spreading it is fine for the linter.
+      const adminDto = {
+        schoolsById: 'admin-9',
+        name: 'Olga',
+        surname: 'Kovaleva',
+        role: UserRoles.ADMIN,
+      } satisfies RegisterDto;
+
+      it('registers an admin without a class, no events touched', async () => {
+        prisma.user.create.mockResolvedValue({ ...adminDto, id: 'a9', class: null });
+
+        const result = await service.register(adminDto);
+
+        expect(prisma.user.create).toHaveBeenCalledWith({
+          data: { ...adminDto, class: null },
+        });
+        expect(prisma.event.updateMany).not.toHaveBeenCalled();
+        expect(jwt.signAsync).toHaveBeenCalledWith({ sub: 'a9', role: UserRoles.ADMIN });
+        expect(result.user.role).toBe(UserRoles.ADMIN);
+      });
+
+      it('BadRequest when an admin is given a class, no user created', async () => {
+        await expect(
+          service.register({ ...adminDto, class: '10A' }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(prisma.user.create).not.toHaveBeenCalled();
+      });
+
+      it.each(['name', 'surname'] as const)(
+        'BadRequest without %s, no user created',
+        async (field) => {
+          await expect(
+            service.register({ ...adminDto, [field]: undefined }),
+          ).rejects.toBeInstanceOf(BadRequestException);
+          expect(prisma.user.create).not.toHaveBeenCalled();
+        },
+      );
     });
 
     it('a concurrent request took the schoolsById first: logs in as that user', async () => {
-      prisma.user.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(storedUser);
+      prisma.user.findUnique
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(storedUser);
       prisma.user.create.mockRejectedValue(p2002());
 
       const result = await service.register(dto);
 
-      expect(result).toEqual({ accessToken: 'signed.jwt.token', user: expectedUser });
+      expect(result).toEqual({
+        accessToken: 'signed.jwt.token',
+        user: expectedUser,
+      });
     });
 
     it('rethrows a unique-constraint error when the user still cannot be found', async () => {
@@ -211,9 +304,17 @@ describe('AuthService.login', () => {
   let prisma: { user: { findFirst: jest.Mock } };
   let jwt: { signAsync: jest.Mock };
 
-  const pupilLogin: LoginDto = { role: UserRoles.PUPIL, schoolsById: 'school-user-1' };
-  const adminId = '3f2c9a4e-1b7d-4e8a-9c0f-2a6b5d7e8f90';
-  const adminStored = { ...storedUser, id: adminId, role: UserRoles.ADMIN, schoolsById: null, class: null };
+  const pupilLogin: LoginDto = {
+    role: UserRoles.PUPIL,
+    schoolsById: 'school-user-1',
+  };
+  const adminStored = {
+    ...storedUser,
+    id: 'a1',
+    role: UserRoles.ADMIN,
+    schoolsById: 'admin-1',
+    class: null,
+  };
 
   beforeEach(() => {
     prisma = { user: { findFirst: jest.fn() } };
@@ -232,65 +333,79 @@ describe('AuthService.login', () => {
     expect(prisma.user.findFirst).toHaveBeenCalledWith({
       where: { schoolsById: 'school-user-1', role: UserRoles.PUPIL },
     });
-    expect(jwt.signAsync).toHaveBeenCalledWith({ sub: 'u1', role: UserRoles.PUPIL });
-    expect(result).toEqual({ accessToken: 'signed.jwt.token', user: expectedUser });
+    expect(jwt.signAsync).toHaveBeenCalledWith({
+      sub: 'u1',
+      role: UserRoles.PUPIL,
+    });
+    expect(result).toEqual({
+      accessToken: 'signed.jwt.token',
+      user: expectedUser,
+    });
   });
 
   it('pupil/teacher: Unauthorized when no matching user (wrong schoolsById or role)', async () => {
     prisma.user.findFirst.mockResolvedValue(null);
 
-    await expect(service.login(pupilLogin)).rejects.toBeInstanceOf(UnauthorizedException);
+    await expect(service.login(pupilLogin)).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
     expect(jwt.signAsync).not.toHaveBeenCalled();
   });
 
   it.each([UserRoles.PUPIL, UserRoles.TEACHER])(
     '%s without a class: Forbidden, no token issued',
     async (role) => {
-      prisma.user.findFirst.mockResolvedValue({ ...storedUser, role, class: null });
+      prisma.user.findFirst.mockResolvedValue({
+        ...storedUser,
+        role,
+        class: null,
+      });
 
-      await expect(service.login({ role, schoolsById: 'school-user-1' })).rejects.toBeInstanceOf(
-        ForbiddenException,
-      );
+      await expect(
+        service.login({ role, schoolsById: 'school-user-1' }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
       expect(jwt.signAsync).not.toHaveBeenCalled();
     },
   );
 
-  it('pupil/teacher: BadRequest without schoolsById, no DB query', async () => {
-    await expect(
-      service.login({ role: UserRoles.TEACHER }),
-    ).rejects.toBeInstanceOf(BadRequestException);
-    expect(prisma.user.findFirst).not.toHaveBeenCalled();
-  });
+  it.each([UserRoles.PUPIL, UserRoles.TEACHER, UserRoles.ADMIN])(
+    '%s: BadRequest without schoolsById, never queries with an undefined schoolsById',
+    async (role) => {
+      await expect(service.login({ role } as LoginDto)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(prisma.user.findFirst).not.toHaveBeenCalled();
+    },
+  );
 
-  it('admin: finds by id and ADMIN role, ignores schoolsById', async () => {
+  it('admin: finds by schoolsById and ADMIN role', async () => {
     prisma.user.findFirst.mockResolvedValue(adminStored);
 
-    const result = await service.login({ role: UserRoles.ADMIN, id: adminId });
+    const result = await service.login({
+      role: UserRoles.ADMIN,
+      schoolsById: 'admin-1',
+    });
 
     expect(prisma.user.findFirst).toHaveBeenCalledWith({
-      where: { id: adminId, role: UserRoles.ADMIN },
+      where: { schoolsById: 'admin-1', role: UserRoles.ADMIN },
     });
     expect(result.user.role).toBe(UserRoles.ADMIN);
     expect(result.accessToken).toBe('signed.jwt.token');
   });
 
-  it('admin: BadRequest without id and never queries with an undefined id', async () => {
-    await expect(
-      service.login({ role: UserRoles.ADMIN }),
-    ).rejects.toBeInstanceOf(BadRequestException);
-    expect(prisma.user.findFirst).not.toHaveBeenCalled();
-  });
-
-  it('admin: Unauthorized when the id belongs to a non-admin', async () => {
+  it('admin: Unauthorized when the schoolsById belongs to a non-admin', async () => {
     prisma.user.findFirst.mockResolvedValue(null);
 
     await expect(
-      service.login({ role: UserRoles.ADMIN, id: adminId }),
+      service.login({ role: UserRoles.ADMIN, schoolsById: 'school-user-1' }),
     ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 
   it('does not expose fields outside the explicit user response', async () => {
-    prisma.user.findFirst.mockResolvedValue({ ...storedUser, secretColumn: 'x' });
+    prisma.user.findFirst.mockResolvedValue({
+      ...storedUser,
+      secretColumn: 'x',
+    });
 
     const result = await service.login(pupilLogin);
 

@@ -49,7 +49,7 @@ export class UsersController {
   @ApiOperation({
     summary: 'Create a user',
     description:
-      "Admin: any role (PUPIL/TEACHER need schoolsById and class; ADMIN must not have them). Teacher: PUPIL only, class is taken from the teacher. Pupil: forbidden.",
+      'Admin: any role (every role needs schoolsById; PUPIL/TEACHER need a class, ADMIN must not have one). Teacher: PUPIL only, class is taken from the teacher. Pupil: forbidden.',
   })
   @ApiBody({
     type: CreateUserDto,
@@ -65,20 +65,35 @@ export class UsersController {
       },
       adminCreatesAdmin: {
         summary: 'Admin creates an admin',
-        value: { name: 'Anna', surname: 'Admin', role: UserRoles.ADMIN },
+        value: {
+          schoolsById: 'admin-002',
+          name: 'Anna',
+          surname: 'Admin',
+          role: UserRoles.ADMIN,
+        },
       },
     },
   })
   @ApiCreatedResponse({ type: UserResponseDto })
-  @ApiBadRequestResponse({ description: 'Validation failed or school fields do not match the role' })
+  @ApiBadRequestResponse({
+    description: 'Validation failed or class does not match the role',
+  })
   @ApiForbiddenResponse({ description: 'Caller may not create this user' })
-  @ApiConflictResponse({ description: 'User with this schoolsById already exists' })
-  create(@CurrentUser() actor: User, @Body() dto: CreateUserDto): Promise<UserResponseDto> {
+  @ApiConflictResponse({
+    description: 'User with this schoolsById already exists',
+  })
+  create(
+    @CurrentUser() actor: User,
+    @Body() dto: CreateUserDto,
+  ): Promise<UserResponseDto> {
     return this.usersService.create(actor, dto);
   }
 
   @Get()
-  @ApiOperation({ summary: 'List users the caller can manage', description: ROLE_HINT })
+  @ApiOperation({
+    summary: 'List users the caller can manage',
+    description: ROLE_HINT,
+  })
   @ApiOkResponse({ type: [UserResponseDto] })
   findAll(@CurrentUser() actor: User): Promise<UserResponseDto[]> {
     return this.usersService.findAll(actor);
@@ -105,9 +120,13 @@ export class UsersController {
   @ApiBody({ type: UpdateUserDto })
   @ApiOkResponse({ type: UserResponseDto })
   @ApiUuidParam('validation failed, or school fields do not match the role')
-  @ApiForbiddenResponse({ description: 'Caller may not change this user or these fields' })
+  @ApiForbiddenResponse({
+    description: 'Caller may not change this user or these fields',
+  })
   @ApiNotFoundResponse({ description: 'User not found' })
-  @ApiConflictResponse({ description: 'User with this schoolsById already exists' })
+  @ApiConflictResponse({
+    description: 'User with this schoolsById already exists',
+  })
   update(
     @CurrentUser() actor: User,
     @Param('id', ParseUUIDPipe) id: string,
@@ -124,9 +143,13 @@ export class UsersController {
   @ApiForbiddenResponse({ description: 'Caller may not manage this user' })
   @ApiNotFoundResponse({ description: 'User not found' })
   @ApiConflictResponse({
-    description: 'User is referenced by other records (e.g. created or moderates events)',
+    description:
+      'User is referenced by other records (e.g. created or moderates events)',
   })
-  remove(@CurrentUser() actor: User, @Param('id', ParseUUIDPipe) id: string): Promise<void> {
+  remove(
+    @CurrentUser() actor: User,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<void> {
     return this.usersService.remove(actor, id);
   }
 }

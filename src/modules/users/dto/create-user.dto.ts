@@ -5,20 +5,18 @@ import { UserRoles } from '../../../../prisma/generated/prisma/client';
 import { trimString } from '../../../common/auth/class-invariant';
 
 /**
- * School fields (schoolsById, class) are optional here because they depend
- * on the role: PUPIL/TEACHER must have them, ADMIN must not.
- * A teacher may omit class: the pupil inherits the teacher's.
- * UsersService enforces all of this.
+ * schoolsById is required for every role. class depends on the role:
+ * PUPIL/TEACHER must have it, ADMIN must not; a teacher may omit it, the pupil
+ * inherits the teacher's. UsersService enforces the class rules.
  */
 export class CreateUserDto {
-  @ApiPropertyOptional({
+  @ApiProperty({
     example: 'school-user-123',
-    description: 'School-system ID (unique). Required for PUPIL/TEACHER, forbidden for ADMIN',
+    description: 'School-system ID (unique)',
   })
-  @IsOptional()
   @IsString()
   @IsNotEmpty()
-  schoolsById?: string;
+  schoolsById!: string;
 
   @ApiProperty({ example: 'Ivan', description: 'First name' })
   @IsString()

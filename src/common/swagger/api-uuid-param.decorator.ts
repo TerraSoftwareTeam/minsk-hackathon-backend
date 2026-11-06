@@ -9,9 +9,15 @@ import { ApiBadRequestResponse, ApiParam } from '@nestjs/swagger';
 export function ApiUuidParam(otherBadRequest?: string): MethodDecorator {
   const invalidId = 'Invalid id: must be a UUID';
   return applyDecorators(
-    ApiParam({ name: 'id', format: 'uuid', example: '3f2c9a4e-1b7d-4e8a-9c0f-2a6b5d7e8f90' }),
+    ApiParam({
+      name: 'id',
+      format: 'uuid',
+      example: '3f2c9a4e-1b7d-4e8a-9c0f-2a6b5d7e8f90',
+    }),
     ApiBadRequestResponse({
-      description: otherBadRequest ? `${invalidId}, or ${otherBadRequest}` : invalidId,
+      description: otherBadRequest
+        ? `${invalidId}, or ${otherBadRequest}`
+        : invalidId,
     }),
   );
 }

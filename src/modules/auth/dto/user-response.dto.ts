@@ -2,16 +2,17 @@ import { ApiProperty } from '@nestjs/swagger';
 import { UserRoles } from '../../../../prisma/generated/prisma/client';
 
 export class UserResponseDto {
-  @ApiProperty({ example: '3f2c9a4e-1b7d-4e8a-9c0f-2a6b5d7e8f90', format: 'uuid' })
+  @ApiProperty({
+    example: '3f2c9a4e-1b7d-4e8a-9c0f-2a6b5d7e8f90',
+    format: 'uuid',
+  })
   id!: string;
 
   @ApiProperty({
     example: 'school-user-123',
-    nullable: true,
-    type: String,
-    description: 'User ID in the school system; null for ADMIN',
+    description: 'User ID in the school system (unique)',
   })
-  schoolsById!: string | null;
+  schoolsById!: string;
 
   @ApiProperty({ example: 'Ivan', description: 'First name' })
   name!: string;
@@ -27,6 +28,10 @@ export class UserResponseDto {
   })
   class!: string | null;
 
-  @ApiProperty({ enum: UserRoles, example: UserRoles.PUPIL, description: 'User role' })
+  @ApiProperty({
+    enum: UserRoles,
+    example: UserRoles.PUPIL,
+    description: 'User role',
+  })
   role!: UserRoles;
 }

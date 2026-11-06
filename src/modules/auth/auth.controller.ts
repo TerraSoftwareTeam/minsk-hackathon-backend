@@ -11,11 +11,7 @@ import {
 } from '@nestjs/swagger';
 import { UserRoles } from '../../../prisma/generated/prisma/client';
 import { AuthService } from './auth.service';
-import {
-  AuthResponseDto,
-  LoginDto,
-  RegisterDto,
-} from './dto/register.dto';
+import { AuthResponseDto, LoginDto, RegisterDto } from './dto/register.dto';
 
 @ApiTags('Auth')
 @Controller('auth')
@@ -24,11 +20,12 @@ export class AuthController {
 
   @Post('register')
   @ApiOperation({
-    summary: 'Register or log in (PUPIL / TEACHER)',
+    summary: 'Register or log in (PUPIL / TEACHER / ADMIN)',
     description:
-      'If a user with this schoolsById exists, logs them in and ignores the other fields. ' +
-      'Otherwise creates a new user from name, surname, role and class (all required then). ' +
-      "A pupil may register into a class that has no teacher yet; their events wait without a teacher, " +
+      'If a user with this schoolsById exists (ADMIN included), logs them in and ignores the other fields. ' +
+      'Otherwise creates a new user from name, surname and role (required then); class is required for PUPIL/TEACHER ' +
+      'and must be omitted for ADMIN. ' +
+      'A pupil may register into a class that has no teacher yet; their events wait without a teacher, ' +
       'and a new teacher of the class takes all of them for moderation. ' +
       'Returns a JWT access token either way. Public endpoint, no auth required.',
   })
@@ -36,7 +33,7 @@ export class AuthController {
     type: RegisterDto,
     examples: {
       existing: {
-        summary: 'Existing user (log in)',
+        summary: 'Existing user of any role, ADMIN included (log in)',
         value: { schoolsById: 'school-user-123' },
       },
       pupil: {
@@ -47,6 +44,15 @@ export class AuthController {
           surname: 'Ivanov',
           role: UserRoles.PUPIL,
           class: '10A',
+        },
+      },
+      admin: {
+        summary: 'New admin',
+        value: {
+          schoolsById: 'admin-001',
+          name: 'Olga',
+          surname: 'Kovaleva',
+          role: UserRoles.ADMIN,
         },
       },
       teacher: {
@@ -67,9 +73,11 @@ export class AuthController {
   })
   @ApiBadRequestResponse({
     description:
-      'Validation failed (invalid fields, blank class, unknown fields), or a new user is missing name/surname/role/class',
+      'Validation failed (invalid fields, blank class, unknown fields), a new user is missing name/surname/role/class, or a new ADMIN was given a class',
   })
-  @ApiForbiddenResponse({ description: 'Existing PUPIL or TEACHER has no class assigned' })
+  @ApiForbiddenResponse({
+    description: 'Existing PUPIL or TEACHER has no class assigned',
+  })
   register(@Body() dto: RegisterDto): Promise<AuthResponseDto> {
     return this.authService.register(dto);
   }
@@ -79,7 +87,7 @@ export class AuthController {
   @ApiOperation({
     summary: 'Log in',
     description:
-      'PUPIL and TEACHER log in by schoolsById; ADMIN logs in by id. Admins cannot register, only log in. Public endpoint, no auth required.',
+      'Every role logs in by schoolsById. Public endpoint, no auth required.',
   })
   @ApiBody({
     type: LoginDto,
@@ -90,7 +98,7 @@ export class AuthController {
       },
       admin: {
         summary: 'Admin',
-        value: { role: UserRoles.ADMIN, id: '3f2c9a4e-1b7d-4e8a-9c0f-2a6b5d7e8f90' },
+        value: { role: UserRoles.ADMIN, schoolsById: 'admin-001' },
       },
     },
   })
@@ -98,9 +106,15 @@ export class AuthController {
     description: 'JWT and user returned',
     type: AuthResponseDto,
   })
-  @ApiBadRequestResponse({ description: 'Validation failed (missing schoolsById or id for the role)' })
-  @ApiUnauthorizedResponse({ description: 'No user with this role and identifier' })
-  @ApiForbiddenResponse({ description: 'PUPIL or TEACHER has no class assigned' })
+  @ApiBadRequestResponse({
+    description: 'Validation failed (missing schoolsById or unknown role)',
+  })
+  @ApiUnauthorizedResponse({
+    description: 'No user with this role and identifier',
+  })
+  @ApiForbiddenResponse({
+    description: 'PUPIL or TEACHER has no class assigned',
+  })
   login(@Body() dto: LoginDto): Promise<AuthResponseDto> {
     return this.authService.login(dto);
   }
