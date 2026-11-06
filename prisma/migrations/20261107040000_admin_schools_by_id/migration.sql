@@ -1,9 +1,11 @@
 -- Admins are identified by schoolsById too, so it becomes required for every user.
 -- Existing admins get their id as schoolsById: the identifier they logged in with keeps working.
 -- ADMIN still has no class; PUPIL and TEACHER must have a non-blank one.
-UPDATE "User" SET "schoolsById" = "id" WHERE "schoolsById" IS NULL;
 
+-- First: the old check requires an ADMIN to have no schoolsById, so the backfill would violate it.
 ALTER TABLE "User" DROP CONSTRAINT IF EXISTS "User_role_fields_check";
+
+UPDATE "User" SET "schoolsById" = "id" WHERE "schoolsById" IS NULL;
 
 ALTER TABLE "User" ALTER COLUMN "schoolsById" SET NOT NULL;
 
