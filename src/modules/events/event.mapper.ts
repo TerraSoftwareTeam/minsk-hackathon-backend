@@ -13,6 +13,7 @@ export function toEventResponse(event: EventWithUsers): EventResponseDto {
     scope: event.scope,
     status: event.status,
     declineReason: event.declineReason,
+    voteThreshold: event.voteThreshold,
     initiator: toUserResponse(event.initiator),
     teacher: toUserResponse(event.teacher),
     createdAt: event.createdAt,

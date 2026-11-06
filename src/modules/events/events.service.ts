@@ -31,6 +31,8 @@ const WITH_USERS = { initiator: true, teacher: true } as const;
  *    Who may vote depends on the scope, relative to the initiator's class:
  *    CLASS - same class, GRADE - same grade (number in the class name, "10A" -> 10),
  *    SCHOOL - any pupil.
+ * 4. When the votes reach the event's voteThreshold (set by the initiator),
+ *    the event moves to ON_ADMIN_MODERATION and voting closes.
  *
  * Who may read an event: its initiator, its assigned teacher, any admin.
  */
@@ -53,6 +55,7 @@ export class EventsService {
           name: dto.name,
           description: dto.description,
           scope: dto.scope,
+          voteThreshold: dto.voteThreshold,
           status: EventStatuses.ON_MODERATION,
           initiatorId: actor.id,
           teacherId: teacher.id,
@@ -115,7 +118,7 @@ export class EventsService {
     }
 
     try {
-      await this.prisma.eventVote.create({ data: { eventId: id, voterId: actor.id } });
+      return await this.prisma.$transaction((tx) => this.castVote(tx, id, actor.id));
     } catch (error) {
       // The (eventId, voterId) primary key rejects a second vote, also under a race.
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
@@ -123,12 +126,39 @@ export class EventsService {
       }
       throw error;
     }
-
-    const votesCount = await this.prisma.eventVote.count({ where: { eventId: id } });
-    return { eventId: id, votesCount };
   }
 
   // ---- internals ----
+
+  /**
+   * Locks the event row, so votes for one event are applied one at a time:
+   * the threshold transition happens exactly once, and no vote is accepted
+   * after the event has left ON_VOTE.
+   */
+  private async castVote(
+    tx: Prisma.TransactionClient,
+    eventId: string,
+    voterId: string,
+  ): Promise<EventVoteResponseDto> {
+    const [locked] = await tx.$queryRaw<{ status: EventStatuses; voteThreshold: number }[]>`
+      SELECT "status", "voteThreshold" FROM "Event" WHERE "id" = ${eventId} FOR UPDATE`;
+    if (!locked) {
+      throw new NotFoundException('Event not found');
+    }
+    if (locked.status !== EventStatuses.ON_VOTE) {
+      throw new ConflictException(`Event is not on vote, its status is ${locked.status}`);
+    }
+
+    await tx.eventVote.create({ data: { eventId, voterId } });
+    const votesCount = await tx.eventVote.count({ where: { eventId } });
+
+    let status: EventStatuses = EventStatuses.ON_VOTE;
+    if (votesCount >= locked.voteThreshold) {
+      status = EventStatuses.ON_ADMIN_MODERATION;
+      await tx.event.update({ where: { id: eventId }, data: { status } });
+    }
+    return { eventId, votesCount, voteThreshold: locked.voteThreshold, status };
+  }
 
   /** Whether a pupil of `voterClass` belongs to the audience of an event created in `eventClass`. */
   private isInScope(voterClass: string | null, eventClass: string | null, scope: Scopes): boolean {

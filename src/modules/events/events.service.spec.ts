@@ -39,6 +39,7 @@ const storedEvent = (over: Partial<EventWithUsers> = {}): EventWithUsers => ({
   scope: Scopes.CLASS,
   status: EventStatuses.ON_MODERATION,
   declineReason: null,
+  voteThreshold: 10,
   initiatorId: pupil.id,
   teacherId: teacher.id,
   initiator: pupil,
@@ -59,6 +60,13 @@ describe('EventsService', () => {
       updateMany: jest.Mock;
     };
     eventVote: { create: jest.Mock; count: jest.Mock };
+    $transaction: jest.Mock;
+  };
+  // Client used inside prisma.$transaction(fn).
+  let tx: {
+    $queryRaw: jest.Mock;
+    eventVote: { create: jest.Mock; count: jest.Mock };
+    event: { update: jest.Mock };
   };
 
   beforeEach(() => {
@@ -71,16 +79,25 @@ describe('EventsService', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       eventVote: {
+        create: jest.fn(),
+        count: jest.fn(),
+      },
+      $transaction: jest.fn((fn: (client: typeof tx) => unknown) => fn(tx)),
+    };
+    tx = {
+      $queryRaw: jest.fn().mockResolvedValue([{ status: EventStatuses.ON_VOTE, voteThreshold: 10 }]),
+      eventVote: {
         create: jest.fn().mockResolvedValue({}),
         count: jest.fn().mockResolvedValue(1),
       },
+      event: { update: jest.fn().mockResolvedValue({}) },
     };
     service = new EventsService(prisma as unknown as PrismaService);
   });
 
   describe('create', () => {
     it('pupil creates an ON_MODERATION event assigned to the teacher of their class', async () => {
-      const result = await service.create(pupil, { name: 'Trip', scope: Scopes.GRADE });
+      const result = await service.create(pupil, { name: 'Trip', scope: Scopes.GRADE, voteThreshold: 10 });
 
       expect(prisma.user.findFirst).toHaveBeenCalledWith({
         where: { role: UserRoles.TEACHER, class: '10A' },
@@ -90,6 +107,7 @@ describe('EventsService', () => {
         name: 'Trip',
         description: undefined,
         scope: Scopes.GRADE,
+        voteThreshold: 10,
         status: EventStatuses.ON_MODERATION,
         initiatorId: pupil.id,
         teacherId: teacher.id,
@@ -102,7 +120,7 @@ describe('EventsService', () => {
       ['teacher', teacher],
       ['admin', admin],
     ])('%s cannot create an event', async (_name, actor) => {
-      await expect(service.create(actor, { name: 'Trip' })).rejects.toBeInstanceOf(
+      await expect(service.create(actor, { name: 'Trip', voteThreshold: 10 })).rejects.toBeInstanceOf(
         ForbiddenException,
       );
       expect(prisma.event.create).not.toHaveBeenCalled();
@@ -110,7 +128,7 @@ describe('EventsService', () => {
 
     it('BadRequest when the class has no teacher', async () => {
       prisma.user.findFirst.mockResolvedValue(null);
-      await expect(service.create(pupil, { name: 'Trip' })).rejects.toBeInstanceOf(
+      await expect(service.create(pupil, { name: 'Trip', voteThreshold: 10 })).rejects.toBeInstanceOf(
         BadRequestException,
       );
       expect(prisma.event.create).not.toHaveBeenCalled();
@@ -118,7 +136,7 @@ describe('EventsService', () => {
 
     it('BadRequest when the pupil has no class', async () => {
       await expect(
-        service.create({ ...pupil, class: null }, { name: 'Trip' }),
+        service.create({ ...pupil, class: null }, { name: 'Trip', voteThreshold: 10 }),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
@@ -129,7 +147,7 @@ describe('EventsService', () => {
           clientVersion: 'test',
         }),
       );
-      await expect(service.create(pupil, { name: 'Trip' })).rejects.toBeInstanceOf(
+      await expect(service.create(pupil, { name: 'Trip', voteThreshold: 10 })).rejects.toBeInstanceOf(
         ConflictException,
       );
     });
@@ -262,18 +280,54 @@ describe('EventsService', () => {
       await expect(
         service.vote({ ...otherPupil, class: voterClass }, 'event-1'),
       ).rejects.toBeInstanceOf(ForbiddenException);
-      expect(prisma.eventVote.create).not.toHaveBeenCalled();
+      expect(tx.eventVote.create).not.toHaveBeenCalled();
     });
 
     it('pupil votes for an ON_VOTE event and gets the vote count', async () => {
-      prisma.eventVote.count.mockResolvedValue(3);
+      tx.eventVote.count.mockResolvedValue(3);
 
       const result = await service.vote(otherPupil, 'event-1');
 
-      expect(prisma.eventVote.create).toHaveBeenCalledWith({
+      expect(tx.eventVote.create).toHaveBeenCalledWith({
         data: { eventId: 'event-1', voterId: otherPupil.id },
       });
-      expect(result).toEqual({ eventId: 'event-1', votesCount: 3 });
+      expect(tx.event.update).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        eventId: 'event-1',
+        votesCount: 3,
+        voteThreshold: 10,
+        status: EventStatuses.ON_VOTE,
+      });
+    });
+
+    it('the vote that reaches the threshold moves the event to ON_ADMIN_MODERATION', async () => {
+      tx.eventVote.count.mockResolvedValue(10);
+
+      const result = await service.vote(pupil, 'event-1');
+
+      expect(tx.event.update).toHaveBeenCalledWith({
+        where: { id: 'event-1' },
+        data: { status: EventStatuses.ON_ADMIN_MODERATION },
+      });
+      expect(result.status).toBe(EventStatuses.ON_ADMIN_MODERATION);
+    });
+
+    it('threshold 1: the first vote already moves the event', async () => {
+      tx.$queryRaw.mockResolvedValue([{ status: EventStatuses.ON_VOTE, voteThreshold: 1 }]);
+      tx.eventVote.count.mockResolvedValue(1);
+
+      const result = await service.vote(pupil, 'event-1');
+
+      expect(result.status).toBe(EventStatuses.ON_ADMIN_MODERATION);
+    });
+
+    it('Conflict, no vote stored, when the event left ON_VOTE after the pre-check', async () => {
+      tx.$queryRaw.mockResolvedValue([
+        { status: EventStatuses.ON_ADMIN_MODERATION, voteThreshold: 10 },
+      ]);
+
+      await expect(service.vote(pupil, 'event-1')).rejects.toBeInstanceOf(ConflictException);
+      expect(tx.eventVote.create).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -281,7 +335,7 @@ describe('EventsService', () => {
       ['admin', admin],
     ])('%s cannot vote', async (_name, actor) => {
       await expect(service.vote(actor, 'event-1')).rejects.toBeInstanceOf(ForbiddenException);
-      expect(prisma.eventVote.create).not.toHaveBeenCalled();
+      expect(tx.eventVote.create).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -291,7 +345,7 @@ describe('EventsService', () => {
     ])('Conflict when the event is %s', async (status) => {
       prisma.event.findUnique.mockResolvedValue({ ...voteTarget(Scopes.SCHOOL), status });
       await expect(service.vote(pupil, 'event-1')).rejects.toBeInstanceOf(ConflictException);
-      expect(prisma.eventVote.create).not.toHaveBeenCalled();
+      expect(tx.eventVote.create).not.toHaveBeenCalled();
     });
 
     it('404 for a missing event', async () => {
@@ -300,7 +354,7 @@ describe('EventsService', () => {
     });
 
     it('Conflict on a second vote by the same pupil', async () => {
-      prisma.eventVote.create.mockRejectedValue(
+      tx.eventVote.create.mockRejectedValue(
         new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
           code: 'P2002',
           clientVersion: 'test',

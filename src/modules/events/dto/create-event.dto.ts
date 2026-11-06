@@ -1,5 +1,14 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsEnum,
+  IsInt,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 import { Scopes } from '../../../../prisma/generated/prisma/client';
 
 export class CreateEventDto {
@@ -19,4 +28,15 @@ export class CreateEventDto {
   @IsOptional()
   @IsEnum(Scopes)
   scope?: Scopes;
+
+  @ApiProperty({
+    example: 15,
+    minimum: 1,
+    maximum: 10000,
+    description: 'Votes needed during ON_VOTE to send the event to admin moderation',
+  })
+  @IsInt()
+  @Min(1)
+  @Max(10000)
+  voteThreshold!: number;
 }

@@ -21,6 +21,9 @@ export class EventResponseDto {
   @ApiProperty({ example: null, nullable: true, type: String, description: 'Set when declined with a reason' })
   declineReason!: string | null;
 
+  @ApiProperty({ example: 15, description: 'Votes needed to move from ON_VOTE to ON_ADMIN_MODERATION' })
+  voteThreshold!: number;
+
   @ApiProperty({ type: UserResponseDto, description: 'Pupil who created the event' })
   initiator!: UserResponseDto;
 
