@@ -1,0 +1,16 @@
+/// An image uploaded to Cloudinary. The file lives there; this row keeps its URL and metadata.
+model Image {
+  id                 String  @id @default(uuid())
+  url                String
+  cloudinaryPublicId String  @unique
+  originalFileName   String?
+  mimeType           String?
+  sizeBytes          Int?
+
+  uploadedBy   User?   @relation("UploadedImages", fields: [uploadedById], references: [id], onDelete: SetNull)
+  uploadedById String?
+
+  createdAt DateTime @default(now())
+
+  @@index([uploadedById])
+}
