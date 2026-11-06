@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -100,6 +101,17 @@ describe('AuthService.register', () => {
     expect(prisma.user.create).toHaveBeenCalledWith({ data: teacherDto });
   });
 
+  it.each([UserRoles.PUPIL, UserRoles.TEACHER])(
+    '%s: BadRequest without a class, no user created',
+    async (role) => {
+      const noClass: RegisterDto = Object.assign(new RegisterDto(), dto, { role, class: '  ' });
+      await expect(service.register(noClass)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(prisma.user.create).not.toHaveBeenCalled();
+    },
+  );
+
   it('throws Conflict when schoolsById is already taken', async () => {
     prisma.user.create.mockRejectedValue(
       new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
@@ -149,6 +161,18 @@ describe('AuthService.login', () => {
     await expect(service.login(pupilLogin)).rejects.toBeInstanceOf(UnauthorizedException);
     expect(jwt.signAsync).not.toHaveBeenCalled();
   });
+
+  it.each([UserRoles.PUPIL, UserRoles.TEACHER])(
+    '%s without a class: Forbidden, no token issued',
+    async (role) => {
+      prisma.user.findFirst.mockResolvedValue({ ...storedUser, role, class: null });
+
+      await expect(service.login({ role, schoolsById: 'school-user-1' })).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      expect(jwt.signAsync).not.toHaveBeenCalled();
+    },
+  );
 
   it('pupil/teacher: BadRequest without schoolsById, no DB query', async () => {
     await expect(

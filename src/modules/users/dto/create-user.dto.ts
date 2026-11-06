@@ -1,6 +1,8 @@
+import { Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsEnum, IsNotEmpty, IsOptional, IsString } from 'class-validator';
 import { UserRoles } from '../../../../prisma/generated/prisma/client';
+import { trimString } from '../../../common/auth/class-invariant';
 
 /**
  * School fields (schoolsById, class) are optional here because they depend
@@ -46,6 +48,7 @@ export class CreateUserDto {
     description: "Class. Required for PUPIL/TEACHER, forbidden for ADMIN. Defaults to the teacher's class",
   })
   @IsOptional()
+  @Transform(trimString)
   @IsString()
   @IsNotEmpty()
   class?: string;

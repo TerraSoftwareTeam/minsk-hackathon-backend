@@ -1,11 +1,13 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Prisma, User, UserRoles } from '../../../prisma/generated/prisma/client';
+import { hasRequiredClass } from '../../common/auth/class-invariant';
 import { PrismaService } from '../../prisma/prisma.service';
 import { toUserResponse } from './user.mapper';
 import { AuthResponseDto, LoginDto, RegisterDto } from './dto/register.dto';
@@ -18,6 +20,10 @@ export class AuthService {
   ) {}
 
   async register(dto: RegisterDto): Promise<AuthResponseDto> {
+    // The DTO already requires it; checked again so the service is safe on its own.
+    if (!hasRequiredClass(dto)) {
+      throw new BadRequestException(`class is required for ${dto.role}`);
+    }
     if (dto.role === UserRoles.PUPIL) {
       await this.assertClassHasTeacher(dto.class);
     }
@@ -68,6 +74,9 @@ export class AuthService {
     const user = await this.findUserForLogin(dto);
     if (!user) {
       throw new UnauthorizedException('Invalid credentials');
+    }
+    if (!hasRequiredClass(user)) {
+      throw new ForbiddenException(`${user.role} has no class assigned, contact an admin`);
     }
 
     return this.buildAuthResponse(user);

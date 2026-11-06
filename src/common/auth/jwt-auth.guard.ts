@@ -1,6 +1,7 @@
 import {
   CanActivate,
   ExecutionContext,
+  ForbiddenException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -8,6 +9,7 @@ import { JwtService } from '@nestjs/jwt';
 import { Request } from 'express';
 import { User } from '../../../prisma/generated/prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { hasRequiredClass } from './class-invariant';
 
 export type AuthenticatedRequest = Request & { user: User };
 
@@ -15,6 +17,7 @@ export type AuthenticatedRequest = Request & { user: User };
  * Verifies the Bearer JWT and loads the user from the database.
  * The role is always taken from the DB, not from the token, so a role change
  * takes effect immediately instead of after the token expires.
+ * A PUPIL/TEACHER without a class is rejected: the rest of the app relies on it.
  */
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
@@ -45,6 +48,9 @@ export class JwtAuthGuard implements CanActivate {
     });
     if (!user) {
       throw new UnauthorizedException('User no longer exists');
+    }
+    if (!hasRequiredClass(user)) {
+      throw new ForbiddenException(`${user.role} has no class assigned, contact an admin`);
     }
 
     request.user = user;

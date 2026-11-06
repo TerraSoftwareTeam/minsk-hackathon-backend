@@ -1,3 +1,4 @@
+import { Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsEnum,
@@ -8,6 +9,7 @@ import {
   ValidateIf,
 } from 'class-validator';
 import { UserRoles } from '../../../../prisma/generated/prisma/client';
+import { trimString } from '../../../common/auth/class-invariant';
 import { UserResponseDto } from './user-response.dto';
 
 // Self-registration can only create pupils and teachers.
@@ -47,6 +49,7 @@ export class RegisterDto {
   role!: UserRoles;
 
   @ApiProperty({ example: '10A', description: 'Class name' })
+  @Transform(trimString)
   @IsString()
   @IsNotEmpty()
   class!: string;
