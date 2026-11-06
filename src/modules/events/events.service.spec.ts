@@ -76,7 +76,7 @@ describe('EventsService', () => {
     $transaction: jest.Mock;
   };
   let images: { uploadImage: jest.Mock; deleteImage: jest.Mock };
-  let notifier: { awaitsTeacher: jest.Mock; awaitsAdmin: jest.Mock };
+  let notifier: { awaitsTeacher: jest.Mock; awaitsAdmin: jest.Mock; decisionMade: jest.Mock };
   // Client used inside prisma.$transaction(fn).
   let tx: {
     $queryRaw: jest.Mock;
@@ -113,7 +113,7 @@ describe('EventsService', () => {
       uploadImage: jest.fn().mockResolvedValue({ id: 'img-new', url: 'https://cdn/new.jpg' }),
       deleteImage: jest.fn().mockResolvedValue(undefined),
     };
-    notifier = { awaitsTeacher: jest.fn(), awaitsAdmin: jest.fn() };
+    notifier = { awaitsTeacher: jest.fn(), awaitsAdmin: jest.fn(), decisionMade: jest.fn() };
     service = new EventsService(
       prisma as unknown as PrismaService,
       images as unknown as ImagesService,
@@ -261,6 +261,11 @@ describe('EventsService', () => {
         data: { status: EventStatuses.ON_VOTE },
       });
       expect(result.status).toBe(EventStatuses.ON_VOTE);
+      expect(notifier.decisionMade).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'event-1', initiatorId: pupil.id }),
+        EventStatuses.ON_VOTE,
+        null,
+      );
     });
 
     it('assigned teacher declines with a reason', async () => {
@@ -269,6 +274,22 @@ describe('EventsService', () => {
         status: EventStatuses.DECLINED,
         declineReason: 'Pick another date',
       });
+      expect(notifier.decisionMade).toHaveBeenCalledWith(
+        expect.objectContaining({ initiatorId: pupil.id }),
+        EventStatuses.DECLINED,
+        'Pick another date',
+      );
+    });
+
+    it('no push when the decision lost a race and changed nothing', async () => {
+      prisma.event.updateMany.mockResolvedValue({ count: 0 });
+      await expect(service.approve(teacher, 'event-1')).rejects.toBeInstanceOf(ConflictException);
+      expect(notifier.decisionMade).not.toHaveBeenCalled();
+    });
+
+    it('no push when the moderator is not allowed', async () => {
+      await expect(service.approve(otherTeacher, 'event-1')).rejects.toBeInstanceOf(ForbiddenException);
+      expect(notifier.decisionMade).not.toHaveBeenCalled();
     });
 
     it('decline without a reason stores null', async () => {
@@ -468,6 +489,11 @@ describe('EventsService', () => {
         data: { status: EventStatuses.FINALIZED },
       });
       expect(result.status).toBe(EventStatuses.FINALIZED);
+      expect(notifier.decisionMade).toHaveBeenCalledWith(
+        expect.objectContaining({ initiatorId: pupil.id }),
+        EventStatuses.FINALIZED,
+        null,
+      );
     });
 
     it('admin declines with a reason: -> DECLINED_BY_ADMIN', async () => {
@@ -476,6 +502,11 @@ describe('EventsService', () => {
         status: EventStatuses.DECLINED_BY_ADMIN,
         declineReason: 'Not this term',
       });
+      expect(notifier.decisionMade).toHaveBeenCalledWith(
+        expect.objectContaining({ initiatorId: pupil.id }),
+        EventStatuses.DECLINED_BY_ADMIN,
+        'Not this term',
+      );
     });
 
     it('admin decline without a reason stores null', async () => {

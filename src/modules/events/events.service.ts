@@ -33,7 +33,7 @@ import {
   ProbabilityHistoryEvent,
   computeSuccessProbability,
 } from './event-probability';
-import { EventModerationNotifier } from './event-moderation.notifier';
+import { DecisionStatus, EventModerationNotifier } from './event-moderation.notifier';
 import { EventWithUsers, toEventResponse, toVotingEventResponse } from './event.mapper';
 
 const WITH_USERS = { initiator: true, teacher: true, image: { select: { url: true } } } as const;
@@ -99,7 +99,8 @@ const ADMIN_MODERATION: ModerationStage = {
  *
  * Push notifications (EventModerationNotifier): the teacher gets one when an
  * event is assigned to them (1), every admin when an event reaches
- * ON_ADMIN_MODERATION (4). Sent after the change is committed.
+ * ON_ADMIN_MODERATION (4), the author on every decision of the teacher (2) and
+ * of an admin (5). Sent after the change is committed.
  *
  * Image (optional, at most one per event): the author sets, replaces or
  * removes it until the event is decided, i.e. while it is pending and not past
@@ -543,7 +544,7 @@ export class EventsService {
     stage: ModerationStage,
     actor: User,
     id: string,
-    data: Prisma.EventUpdateManyMutationInput,
+    data: { status: DecisionStatus; declineReason?: string | null },
   ): Promise<EventResponseDto> {
     const event = await this.findEventOrThrow(id);
     if (!stage.mayModerate(actor, event)) {
@@ -567,6 +568,8 @@ export class EventsService {
     if (count === 0) {
       throw new ConflictException('Event has already been moderated');
     }
+    // Only the request that changed the row gets here, so the author is notified once.
+    this.notifier.decisionMade(event, data.status, data.declineReason ?? null);
     return this.toResponse(await this.findEventOrThrow(id));
   }
 

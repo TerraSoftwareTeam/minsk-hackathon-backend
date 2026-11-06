@@ -52,9 +52,11 @@ API (NestJS, контейнер)
 - Мобилка регистрирует токен: `POST /api/v1/device-token` `{ token, platform?, deviceId? }` — при логине и
   старте приложения; `DELETE /api/v1/device-token` `{ token }` — при выходе. У пользователя может быть
   несколько устройств.
-- Кому приходят пуши: учителю — когда ему назначено новое мероприятие на модерацию; всем админам — когда
-  мероприятие набрало голоса. В `data`: `type` (`EVENT_TEACHER_MODERATION` / `EVENT_ADMIN_MODERATION`),
-  `eventId`, `status`.
+- Кому приходят пуши (`data`: `type`, `eventId`, `status`):
+  - учителю — новое мероприятие на модерацию (`EVENT_TEACHER_MODERATION`);
+  - всем админам — мероприятие набрало голоса (`EVENT_ADMIN_MODERATION`);
+  - автору — решение по его мероприятию (`EVENT_DECISION`, `status`: `ON_VOTE` / `DECLINED` — учитель,
+    `FINALIZED` / `DECLINED_BY_ADMIN` — администрация; причина отказа в тексте, обрезана до 200 символов).
 - Мёртвые токены (`UNREGISTERED`, `INVALID_ARGUMENT`) удаляются автоматически после отправки.
 
 ## Запуск

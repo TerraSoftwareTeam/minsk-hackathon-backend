@@ -62,6 +62,41 @@ describe('EventModerationNotifier', () => {
     });
   });
 
+  describe('decision to the author', () => {
+    const event = { id: 'event-1', name: 'Trip', initiatorId: 'pupil-1' };
+    const sent = () => push.sendToUsers.mock.calls[0];
+
+    it.each([
+      [EventStatuses.ON_VOTE, 'Учитель одобрил мероприятие', '«Trip» вышло на голосование'],
+      [EventStatuses.DECLINED, 'Учитель отклонил мероприятие', '«Trip»'],
+      [EventStatuses.FINALIZED, 'Мероприятие одобрено', 'Администрация одобрила «Trip»'],
+      [EventStatuses.DECLINED_BY_ADMIN, 'Администрация отклонила мероприятие', '«Trip»'],
+    ] as const)('%s', async (status, title, body) => {
+      notifier.decisionMade(event, status);
+      await flush();
+
+      expect(push.sendToUsers).toHaveBeenCalledWith(['pupil-1'], {
+        title,
+        body,
+        data: { type: MODERATION_PUSH_TYPES.DECISION, eventId: 'event-1', status },
+      });
+    });
+
+    it('adds the decline reason', async () => {
+      notifier.decisionMade(event, EventStatuses.DECLINED, 'Pick another date');
+      await flush();
+      expect(sent()[1].body).toBe('«Trip». Причина: Pick another date');
+    });
+
+    it('shortens a long reason to fit the FCM 4 KB limit', async () => {
+      notifier.decisionMade(event, EventStatuses.DECLINED_BY_ADMIN, 'я'.repeat(2000));
+      await flush();
+      const reason = sent()[1].body.split('Причина: ')[1];
+      expect(Array.from(reason)).toHaveLength(200);
+      expect(reason.endsWith('…')).toBe(true);
+    });
+  });
+
   it('swallows a failure instead of rejecting', async () => {
     prisma.user.findMany.mockRejectedValue(new Error('db down'));
     expect(() => notifier.awaitsAdmin('event-1')).not.toThrow();
