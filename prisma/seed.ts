@@ -592,7 +592,7 @@ const PAST: SeedEvent[] = [
   },
 ];
 
-/** Upcoming events in every pending status. Pending ones must be before their deadline (5 days before the date; 3 on admin moderation). */
+/** Upcoming events in every pending status. Pending ones must be before their deadline (3 days before the date; the date itself on admin moderation). */
 const UPCOMING: SeedEvent[] = [
   // teacher queues
   {
@@ -827,8 +827,8 @@ function likesFor(event: SeedEvent): number {
 }
 
 /** Deadlines before the date, as in src/modules/events/event-deadlines.ts. */
-const VOTING_CLOSES_BEFORE_START_MS = 5 * DAY_MS;
-const ADMIN_DECIDES_BEFORE_START_MS = 3 * DAY_MS;
+const VOTING_CLOSES_BEFORE_START_MS = 3 * DAY_MS;
+// The admin decides until the date itself.
 
 /** Requests are filed 1-3 weeks before the planned date, never in the future. */
 function seedCreatedAt(event: SeedEvent, planned: Date, now: Date): Date {
@@ -869,7 +869,7 @@ function assertConsistent(
   const pastBefore = (ms: number) => planned.getTime() - ms <= now.getTime();
   const overdue =
     event.status === ON_ADMIN_MODERATION
-      ? pastBefore(ADMIN_DECIDES_BEFORE_START_MS)
+      ? pastBefore(0)
       : pastBefore(VOTING_CLOSES_BEFORE_START_MS);
   const pending = [
     ON_MODERATION,
@@ -889,7 +889,7 @@ function assertConsistent(
     fail('moved past moderation in a class that has no teacher');
   if (pending.includes(event.status) && overdue)
     fail('pending, but its deadline has passed');
-  if (event.status === EXPIRED && !pastBefore(ADMIN_DECIDES_BEFORE_START_MS))
+  if (event.status === EXPIRED && !pastBefore(0))
     fail('expired before its deadline');
 }
 

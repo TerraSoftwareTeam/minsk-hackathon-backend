@@ -81,7 +81,7 @@ export class CreateEventDto {
     description:
       'Any role. Maximum participants (votes; the pupil organizer counts), at least voteThreshold; omitted = unlimited. ' +
       'Voting stays open past voteThreshold until this many pupils joined (the event then moves on at once) ' +
-      'or until voting closes, 5 days before startsAt',
+      'or until voting closes, 3 days before startsAt',
   })
   @IsOptional()
   @IsInt()
@@ -95,7 +95,7 @@ export class CreateEventDto {
     description:
       'Required for every role: when the event takes place, ISO 8601 date-time with a timezone (Z or ±hh:mm), in the future. ' +
       'Never changed afterwards, not even by a moderator (who can only approve or decline). ' +
-      'Teacher moderation and voting end 5 days before it, admin moderation 3 days before it',
+      'Teacher moderation and voting end 3 days before it, admin moderation when it starts',
   })
   @IsISO8601({ strict: true })
   @Matches(/T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/, {

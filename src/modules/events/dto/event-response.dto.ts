@@ -87,7 +87,7 @@ export class EventResponseDto {
   @ApiProperty({
     example: '2026-12-06T10:00:00.000Z',
     description:
-      'Computed: startsAt - 5 days, for every role. Teacher moderation and voting end then: ' +
+      'Computed: startsAt - 3 days, for every role. Teacher moderation and voting end then: ' +
       'ON_MODERATION -> EXPIRED; ON_VOTE -> moves on with at least voteThreshold votes, otherwise EXPIRED',
   })
   votingClosesAt!: Date;
@@ -97,8 +97,8 @@ export class EventResponseDto {
     nullable: true,
     type: Date,
     description:
-      'Computed: when the current pending stage ends. ON_MODERATION, ON_VOTE: votingClosesAt (startsAt - 5 days); ' +
-      'ON_ADMIN_MODERATION: startsAt - 3 days, the admin must decide by then, otherwise EXPIRED. null once decided',
+      'Computed: when the current pending stage ends. ON_MODERATION, ON_VOTE: votingClosesAt (startsAt - 3 days); ' +
+      'ON_ADMIN_MODERATION: startsAt, the admin must decide before the event starts, otherwise EXPIRED. null once decided',
   })
   deadline!: Date | null;
 

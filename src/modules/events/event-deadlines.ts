@@ -7,10 +7,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * event takes place, whoever created it. At that moment voting closes: enough votes ->
  * the event moves on (admin moderation, or FINALIZED for an admin event), else EXPIRED.
  */
-export const VOTING_CLOSES_BEFORE_START_MS = 5 * DAY_MS;
-
-/** The admin decides by this long before the event takes place, otherwise it is EXPIRED. */
-export const ADMIN_DECIDES_BEFORE_START_MS = 3 * DAY_MS;
+export const VOTING_CLOSES_BEFORE_START_MS = 3 * DAY_MS;
 
 /** Old events rejected before every author chose a date have none: their deadline was a month after creation. */
 const LEGACY_DECISION_WINDOW_MS = 30 * DAY_MS;
@@ -40,7 +37,7 @@ function beforeStart(startsAt: Date, ms: number): Date {
   return new Date(startsAt.getTime() - ms);
 }
 
-/** When voting (and teacher moderation) closes: 5 days before the date. */
+/** When voting (and teacher moderation) closes: 3 days before the date. */
 export function votingClosesAt(event: Omit<DeadlineFields, 'status'>): Date {
   if (!event.startsAt) {
     return new Date(event.createdAt.getTime() + LEGACY_DECISION_WINDOW_MS);
@@ -48,10 +45,13 @@ export function votingClosesAt(event: Omit<DeadlineFields, 'status'>): Date {
   return beforeStart(event.startsAt, VOTING_CLOSES_BEFORE_START_MS);
 }
 
-/** When the current pending stage ends: 3 days before the date on admin moderation, else when voting closes. */
+/**
+ * When the current pending stage ends: on admin moderation the date itself (the admin
+ * decides until the event starts), otherwise when voting closes.
+ */
 export function decisionDeadline(event: DeadlineFields): Date {
   if (event.status === EventStatuses.ON_ADMIN_MODERATION && event.startsAt) {
-    return beforeStart(event.startsAt, ADMIN_DECIDES_BEFORE_START_MS);
+    return event.startsAt;
   }
   return votingClosesAt(event);
 }
@@ -69,10 +69,7 @@ export function beforeDeadline(now: Date = new Date()): Prisma.EventWhereInput {
   return {
     OR: [
       { status: { in: UNTIL_VOTING_CLOSES }, startsAt: { gt: cutoff(now, VOTING_CLOSES_BEFORE_START_MS) } },
-      {
-        status: EventStatuses.ON_ADMIN_MODERATION,
-        startsAt: { gt: cutoff(now, ADMIN_DECIDES_BEFORE_START_MS) },
-      },
+      { status: EventStatuses.ON_ADMIN_MODERATION, startsAt: { gt: now } },
     ],
   };
 }
@@ -87,10 +84,7 @@ export function moderationPastDeadline(now: Date = new Date()): Prisma.EventWher
   return {
     OR: [
       { status: EventStatuses.ON_MODERATION, startsAt: { lte: cutoff(now, VOTING_CLOSES_BEFORE_START_MS) } },
-      {
-        status: EventStatuses.ON_ADMIN_MODERATION,
-        startsAt: { lte: cutoff(now, ADMIN_DECIDES_BEFORE_START_MS) },
-      },
+      { status: EventStatuses.ON_ADMIN_MODERATION, startsAt: { lte: now } },
     ],
   };
 }

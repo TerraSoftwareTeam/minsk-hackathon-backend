@@ -71,8 +71,8 @@ export class EventsController {
       'ADMIN (school event): no moderation, scope SCHOOL. Status ON_VOTE, then FINALIZED (no admin moderation).\n\n' +
       'Every role: startsAt is required (in the future) and nobody can change it afterwards: moderators only approve or decline. ' +
       'Voting (ON_VOTE) gathers participants until maxParticipants joined (optional; the event moves on at once) ' +
-      'or until votingClosesAt (5 days before startsAt): then with at least voteThreshold votes it moves on, otherwise EXPIRED. ' +
-      'Teacher moderation also ends at votingClosesAt, admin moderation 3 days before startsAt; not decided by then -> EXPIRED.',
+      'or until votingClosesAt (3 days before startsAt): then with at least voteThreshold votes it moves on, otherwise EXPIRED. ' +
+      'Teacher moderation also ends at votingClosesAt, admin moderation at startsAt; not decided by then -> EXPIRED.',
   })
   @ApiBody({ type: CreateEventDto })
   @ApiCreatedResponse({ type: EventResponseDto })
@@ -117,7 +117,7 @@ export class EventsController {
   @ApiOperation({
     summary: "Teacher's moderation list",
     description:
-      "Teacher only. Events of pupils of the caller's class with status ON_MODERATION, oldest first. Events past their deadline (5 days before startsAt) are hidden.",
+      "Teacher only. Events of pupils of the caller's class with status ON_MODERATION, oldest first. Events past their deadline (3 days before startsAt) are hidden.",
   })
   @ApiOkResponse({ type: [EventResponseDto] })
   @ApiForbiddenResponse({ description: 'Caller is not a teacher' })
@@ -153,7 +153,7 @@ export class EventsController {
     summary: "Admin's moderation list",
     description:
       'Admin only. Events with status ON_ADMIN_MODERATION (passed the vote), oldest first. ' +
-      'Events past their deadline (3 days before startsAt, see deadline) are hidden.',
+      'Events that have already started (deadline = startsAt) are hidden.',
   })
   @ApiOkResponse({ type: [EventResponseDto] })
   @ApiForbiddenResponse({ description: 'Caller is not an admin' })
@@ -191,7 +191,7 @@ export class EventsController {
   @ApiNotFoundResponse({ description: 'Event not found' })
   @ApiConflictResponse({
     description:
-      'Event is not on moderation anymore, or its deadline (5 days before startsAt) has passed',
+      'Event is not on moderation anymore, or its deadline (3 days before startsAt) has passed',
   })
   approve(
     @CurrentUser() actor: User,
@@ -214,7 +214,7 @@ export class EventsController {
   @ApiNotFoundResponse({ description: 'Event not found' })
   @ApiConflictResponse({
     description:
-      'Event is not on moderation anymore, or its deadline (5 days before startsAt) has passed',
+      'Event is not on moderation anymore, or its deadline (3 days before startsAt) has passed',
   })
   decline(
     @CurrentUser() actor: User,
@@ -237,7 +237,7 @@ export class EventsController {
   @ApiNotFoundResponse({ description: 'Event not found' })
   @ApiConflictResponse({
     description:
-      'Event is not on admin moderation, or its deadline (3 days before startsAt) has passed',
+      'Event is not on admin moderation, or it has already started (startsAt has passed)',
   })
   adminApprove(
     @CurrentUser() actor: User,
@@ -260,7 +260,7 @@ export class EventsController {
   @ApiNotFoundResponse({ description: 'Event not found' })
   @ApiConflictResponse({
     description:
-      'Event is not on admin moderation, or its deadline (3 days before startsAt) has passed',
+      'Event is not on admin moderation, or it has already started (startsAt has passed)',
   })
   adminDecline(
     @CurrentUser() actor: User,
@@ -371,7 +371,7 @@ export class EventsController {
   @ApiOperation({
     summary: 'Vote for an event',
     description:
-      "Pupil only. The event must be ON_VOTE and voting must be open (until votingClosesAt: 5 days before startsAt). One vote per pupil per event, the pupil organizer's included (cast on creation). Audience by scope, relative to the initiator's class: CLASS - same class, GRADE - same grade (first number of the class name), SCHOOL - any pupil. Voting stays open past voteThreshold: only the vote that reaches maxParticipants moves the event on at once (to ON_ADMIN_MODERATION, an admin event to FINALIZED); without it the event moves on (or expires) when voting closes.",
+      "Pupil only. The event must be ON_VOTE and voting must be open (until votingClosesAt: 3 days before startsAt). One vote per pupil per event, the pupil organizer's included (cast on creation). Audience by scope, relative to the initiator's class: CLASS - same class, GRADE - same grade (first number of the class name), SCHOOL - any pupil. Voting stays open past voteThreshold: only the vote that reaches maxParticipants moves the event on at once (to ON_ADMIN_MODERATION, an admin event to FINALIZED); without it the event moves on (or expires) when voting closes.",
   })
   @ApiUuidParam()
   @ApiOkResponse({ type: EventVoteResponseDto })

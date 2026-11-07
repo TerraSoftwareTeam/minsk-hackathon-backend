@@ -20,8 +20,8 @@ model Event {
   /// When the event takes place: chosen by the author on creation, whatever their role,
   /// and never changed (moderators only approve or decline). Present in every status;
   /// only old events rejected before authors chose dates may have none.
-  /// It sets the deadlines (event-deadlines.ts): teacher moderation and voting end 5 days
-  /// before it, admin moderation 3 days before it. Voting closes at maxParticipants or at
+  /// It sets the deadlines (event-deadlines.ts): teacher moderation and voting end 3 days
+  /// before it, admin moderation when it starts. Voting closes at maxParticipants or at
   /// its deadline: voteThreshold reached -> the event moves on, otherwise EXPIRED. A stage
   /// of moderation not decided by its deadline -> EXPIRED.
   startsAt DateTime?

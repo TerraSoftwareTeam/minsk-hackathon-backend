@@ -89,14 +89,14 @@ const TEACHER_MODERATION: ModerationStage = {
   from: EventStatuses.ON_MODERATION,
   mayModerate: (actor, event) => isTeacherOfClass(actor, event.initiator.class),
   forbiddenMessage: "Only a teacher of the author's class can moderate this event",
-  lateMessage: 'Too late to moderate: teacher moderation ends 5 days before the event starts',
+  lateMessage: 'Too late to moderate: teacher moderation ends 3 days before the event starts',
 };
 
 const ADMIN_MODERATION: ModerationStage = {
   from: EventStatuses.ON_ADMIN_MODERATION,
   mayModerate: (actor) => actor.role === UserRoles.ADMIN,
   forbiddenMessage: 'Only an admin can moderate this event',
-  lateMessage: 'Too late to moderate: the admin decides by 3 days before the event starts',
+  lateMessage: 'Too late to moderate: the admin decides until the event starts',
 };
 
 @Injectable()
@@ -495,7 +495,7 @@ export class EventsService {
   }
 
   /**
-   * Closes the voting of ON_VOTE events whose voting deadline (5 days before the date)
+   * Closes the voting of ON_VOTE events whose voting deadline (3 days before the date)
    * has come: with at least voteThreshold votes the event moves on (admin moderation,
    * or FINALIZED for an admin event), otherwise it is EXPIRED. Returns how many closed.
    */
@@ -671,7 +671,7 @@ export class EventsService {
       throw new ConflictException(`Event is not on vote, its status is ${event.status}`);
     }
     if (isPastDeadline(event)) {
-      throw new ConflictException('Voting is closed: it closes 5 days before the event starts');
+      throw new ConflictException('Voting is closed: it closes 3 days before the event starts');
     }
   }
 

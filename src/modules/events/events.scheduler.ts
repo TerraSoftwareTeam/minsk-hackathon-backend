@@ -11,7 +11,7 @@ export class EventsScheduler {
   @Cron(CronExpression.EVERY_MINUTE)
   async processDeadlines(): Promise<void> {
     try {
-      // Voting first: an event it moves to admin moderation still has 2 days there.
+      // Voting first: an event it moves to admin moderation then has until its start there.
       await this.eventsService.closeVoting();
       await this.eventsService.expireOverdue();
     } catch (error) {
