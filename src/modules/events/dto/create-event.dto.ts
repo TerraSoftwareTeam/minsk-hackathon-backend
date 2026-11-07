@@ -79,8 +79,8 @@ export class CreateEventDto {
     minimum: 1,
     maximum: 10000,
     description:
-      'Any role. Maximum participants (votes; the pupil organizer counts), at least voteThreshold; omitted = unlimited. ' +
-      'Voting stays open past voteThreshold until this many pupils joined (the event then moves on at once) ' +
+      'Any role. Maximum participants (votes; the pupil organizer counts), at least voteThreshold; omitted = the event moves on as soon as voteThreshold is reached. ' +
+      'With it, voting stays open past voteThreshold until this many pupils joined (the event then moves on at once) ' +
       'or until voting closes, 3 days before startsAt',
   })
   @IsOptional()

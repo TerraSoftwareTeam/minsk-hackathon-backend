@@ -38,7 +38,7 @@ export class EventResponseDto {
     description:
       'Pupil event: ON_MODERATION (teacher) -> ON_VOTE (pupils) -> ON_ADMIN_MODERATION (admin) -> FINALIZED. ' +
       'Teacher event: starts ON_VOTE, then the same (never ON_MODERATION or DECLINED). ' +
-      'ON_VOTE lasts until maxParticipants joined or until votingClosesAt; then with at least voteThreshold votes it moves on ' +
+      'ON_VOTE lasts until maxParticipants (voteThreshold when it is null) joined or until votingClosesAt; then with at least voteThreshold votes it moves on ' +
       '(admin event: straight to FINALIZED), otherwise EXPIRED. ' +
       'DECLINED / DECLINED_BY_ADMIN: rejected by the teacher / admin. EXPIRED: not decided before its deadline (see deadline)',
   })
@@ -69,7 +69,7 @@ export class EventResponseDto {
     example: 30,
     nullable: true,
     description:
-      'Maximum participants (votes; the pupil organizer counts), >= voteThreshold. null = unlimited. ' +
+      'Maximum participants (votes; the pupil organizer counts), >= voteThreshold. null = unlimited: then voteThreshold acts as the target. ' +
       'Voting stays open until it is reached or until votingClosesAt',
   })
   maxParticipants!: number | null;

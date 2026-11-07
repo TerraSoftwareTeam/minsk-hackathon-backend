@@ -724,10 +724,12 @@ export class EventsService {
     await tx.eventVote.create({ data: { eventId, voterId } });
     const votesCount = await tx.eventVote.count({ where: { eventId } });
 
-    // Voting stays open past voteThreshold: only the vote that fills the event closes it.
+    // With maxParticipants, voting stays open past voteThreshold: only the vote that fills
+    // the event closes it. Without it, the vote that reaches voteThreshold does.
+    const target = locked.maxParticipants ?? locked.voteThreshold;
     let status: EventStatuses = EventStatuses.ON_VOTE;
     let award: FinalizedExpAward | null = null;
-    if (locked.maxParticipants !== null && votesCount >= locked.maxParticipants) {
+    if (votesCount >= target) {
       ({ status, award } = await this.moveOnFromVote(tx, eventId, locked.createdByRole));
     }
     return {

@@ -1097,13 +1097,12 @@ describe('EventsService', () => {
         });
       });
 
-      it('voting stays open past the threshold when there is no maximum', async () => {
+      it('with no maximum, the vote that reaches the threshold finalizes it', async () => {
         prisma.event.findUnique.mockResolvedValue(adminTarget(FUTURE));
         tx.$queryRaw.mockResolvedValue(lockedAdminEvent(FUTURE));
-        tx.eventVote.count.mockResolvedValue(25);
+        tx.eventVote.count.mockResolvedValue(10);
 
-        await expect(service.vote(pupil, 'event-1')).resolves.toMatchObject({ status: EventStatuses.ON_VOTE });
-        expect(tx.event.update).not.toHaveBeenCalled();
+        await expect(service.vote(pupil, 'event-1')).resolves.toMatchObject({ status: EventStatuses.FINALIZED });
       });
 
       it('the vote that reaches maxParticipants finalizes it: no admin moderation', async () => {
@@ -1194,14 +1193,17 @@ describe('EventsService', () => {
       expect(notifier.finalizedByVotes).not.toHaveBeenCalled();
     });
 
-    it('voting stays open past the threshold: the event waits for its maximum or for voting to close', async () => {
-      tx.eventVote.count.mockResolvedValue(11);
+    it('with no maximum, the vote that reaches the threshold moves the event to ON_ADMIN_MODERATION', async () => {
+      tx.eventVote.count.mockResolvedValue(10);
 
       const result = await service.vote(pupil, 'event-1');
 
-      expect(result).toMatchObject({ status: EventStatuses.ON_VOTE, votesCount: 11, maxParticipants: null });
-      expect(tx.event.update).not.toHaveBeenCalled();
-      expect(notifier.awaitsAdmin).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ status: EventStatuses.ON_ADMIN_MODERATION, votesCount: 10, maxParticipants: null });
+      expect(tx.event.update).toHaveBeenCalledWith({
+        where: { id: 'event-1' },
+        data: { status: EventStatuses.ON_ADMIN_MODERATION },
+      });
+      expect(notifier.awaitsAdmin).toHaveBeenCalledWith('event-1');
     });
 
     it('the vote that reaches maxParticipants moves the event to ON_ADMIN_MODERATION', async () => {

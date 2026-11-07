@@ -23,7 +23,7 @@ export class EventVoteResponseDto {
     type: 'integer',
     example: 30,
     nullable: true,
-    description: 'Maximum participants: the vote that reaches it closes voting at once. null = unlimited',
+    description: 'Maximum participants: the vote that reaches it closes voting at once. null = the vote that reaches voteThreshold closes voting at once',
   })
   maxParticipants!: number | null;
 
@@ -31,7 +31,7 @@ export class EventVoteResponseDto {
     enum: EventStatuses,
     example: EventStatuses.ON_VOTE,
     description:
-      'Status after this vote: ON_VOTE until maxParticipants is reached; the vote that reaches it moves the event to ' +
+      'Status after this vote: ON_VOTE until maxParticipants (voteThreshold when it is null) is reached; the vote that reaches it moves the event to ' +
       'ON_ADMIN_MODERATION (FINALIZED for an admin event)',
   })
   status!: EventStatuses;

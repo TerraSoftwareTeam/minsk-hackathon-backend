@@ -13,15 +13,16 @@ model Event {
   voteThreshold Int
 
   /// Optional cap on participants (pupils who voted, the pupil organizer included);
-  /// null = unlimited. Always >= voteThreshold. Voting stays open past voteThreshold
+  /// null = unlimited. Always >= voteThreshold. With it, voting stays open past voteThreshold
   /// until this many pupils joined (the event then moves on at once) or voting closes.
+  /// Without it, the vote that reaches voteThreshold moves the event on at once.
   maxParticipants Int?
 
   /// When the event takes place: chosen by the author on creation, whatever their role,
   /// and never changed (moderators only approve or decline). Present in every status;
   /// only old events rejected before authors chose dates may have none.
   /// It sets the deadlines (event-deadlines.ts): teacher moderation and voting end 3 days
-  /// before it, admin moderation when it starts. Voting closes at maxParticipants or at
+  /// before it, admin moderation when it starts. Voting closes at maxParticipants (voteThreshold when it is null) or at
   /// its deadline: voteThreshold reached -> the event moves on, otherwise EXPIRED. A stage
   /// of moderation not decided by its deadline -> EXPIRED.
   startsAt DateTime?

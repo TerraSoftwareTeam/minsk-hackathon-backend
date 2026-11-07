@@ -70,7 +70,7 @@ export class EventsController {
       'Then ON_ADMIN_MODERATION, where the admin approves or declines.\n\n' +
       'ADMIN (school event): no moderation, scope SCHOOL. Status ON_VOTE, then FINALIZED (no admin moderation).\n\n' +
       'Every role: startsAt is required (in the future) and nobody can change it afterwards: moderators only approve or decline. ' +
-      'Voting (ON_VOTE) gathers participants until maxParticipants joined (optional; the event moves on at once) ' +
+      'Voting (ON_VOTE) gathers participants until maxParticipants joined (optional, voteThreshold when omitted; the event moves on at once) ' +
       'or until votingClosesAt (3 days before startsAt): then with at least voteThreshold votes it moves on, otherwise EXPIRED. ' +
       'Teacher moderation also ends at votingClosesAt, admin moderation at startsAt; not decided by then -> EXPIRED.',
   })
@@ -371,7 +371,7 @@ export class EventsController {
   @ApiOperation({
     summary: 'Vote for an event',
     description:
-      "Pupil only. The event must be ON_VOTE and voting must be open (until votingClosesAt: 3 days before startsAt). One vote per pupil per event, the pupil organizer's included (cast on creation). Audience by scope, relative to the initiator's class: CLASS - same class, GRADE - same grade (first number of the class name), SCHOOL - any pupil. Voting stays open past voteThreshold: only the vote that reaches maxParticipants moves the event on at once (to ON_ADMIN_MODERATION, an admin event to FINALIZED); without it the event moves on (or expires) when voting closes.",
+      "Pupil only. The event must be ON_VOTE and voting must be open (until votingClosesAt: 3 days before startsAt). One vote per pupil per event, the pupil organizer's included (cast on creation). Audience by scope, relative to the initiator's class: CLASS - same class, GRADE - same grade (first number of the class name), SCHOOL - any pupil. The vote that reaches maxParticipants (voteThreshold when it is not set) moves the event on at once (to ON_ADMIN_MODERATION, an admin event to FINALIZED); without it the event moves on (or expires) when voting closes.",
   })
   @ApiUuidParam()
   @ApiOkResponse({ type: EventVoteResponseDto })
@@ -381,7 +381,7 @@ export class EventsController {
   @ApiNotFoundResponse({ description: 'Event not found' })
   @ApiConflictResponse({
     description:
-      'Event is not on vote (also: it is full, maxParticipants reached), voting has closed (votingClosesAt has passed), or the pupil has already voted',
+      'Event is not on vote (also: it is full, maxParticipants, or voteThreshold without it, reached), voting has closed (votingClosesAt has passed), or the pupil has already voted',
   })
   vote(
     @CurrentUser() actor: User,
