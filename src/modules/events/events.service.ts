@@ -38,6 +38,7 @@ import {
 } from './event-probability';
 import { DecisionStatus, EventModerationNotifier } from './event-moderation.notifier';
 import { EventLikeResponseDto } from './dto/event-like-response.dto';
+import { FinalizedExpAward, awardFinalizedExp } from './event-exp';
 import {
   EventComputed,
   EventWithUsers,
@@ -288,8 +289,9 @@ export class EventsService {
     this.assertVotingOpen(event);
 
     let result: EventVoteResponseDto;
+    let award: FinalizedExpAward | null;
     try {
-      result = await this.prisma.$transaction((tx) => this.castVote(tx, id, actor.id));
+      ({ result, award } = await this.prisma.$transaction((tx) => this.castVote(tx, id, actor.id)));
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         throw new ConflictException('You have already voted for this event');
@@ -298,8 +300,8 @@ export class EventsService {
     }
     if (result.status === EventStatuses.ON_ADMIN_MODERATION) {
       this.notifier.awaitsAdmin(id);
-    } else if (result.status === EventStatuses.FINALIZED) {
-      this.notifier.finalizedByVotes(id);
+    } else if (award) {
+      this.notifier.finalizedByVotes(id, award.participantIds);
     }
     return result;
   }
@@ -582,7 +584,7 @@ export class EventsService {
     tx: Prisma.TransactionClient,
     eventId: string,
     voterId: string,
-  ): Promise<EventVoteResponseDto> {
+  ): Promise<{ result: EventVoteResponseDto; award: FinalizedExpAward | null }> {
     const locked = await this.lockForVoting(tx, eventId);
     this.assertVotingOpen(locked);
 
@@ -590,14 +592,18 @@ export class EventsService {
     const votesCount = await tx.eventVote.count({ where: { eventId } });
 
     let status: EventStatuses = EventStatuses.ON_VOTE;
+    let award: FinalizedExpAward | null = null;
     if (votesCount >= locked.voteThreshold) {
       status =
         locked.createdByRole === UserRoles.ADMIN
           ? EventStatuses.FINALIZED
           : EventStatuses.ON_ADMIN_MODERATION;
       await tx.event.update({ where: { id: eventId }, data: { status } });
+      if (status === EventStatuses.FINALIZED) {
+        award = await awardFinalizedExp(tx, eventId);
+      }
     }
-    return { eventId, votesCount, voteThreshold: locked.voteThreshold, status };
+    return { result: { eventId, votesCount, voteThreshold: locked.voteThreshold, status }, award };
   }
 
   private isInScope(voterClass: string | null, eventClass: string | null, scope: Scopes): boolean {
@@ -638,14 +644,23 @@ export class EventsService {
       throw new ConflictException(stage.lateMessage);
     }
 
-    const { count } = await this.prisma.event.updateMany({
-      where: { id, status: stage.from, ...beforeDeadline() },
-      data,
+    const award = await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.event.updateMany({
+        where: { id, status: stage.from, ...beforeDeadline() },
+        data,
+      });
+      if (count === 0) {
+        throw new ConflictException('Event has already been moderated');
+      }
+      return data.status === EventStatuses.FINALIZED ? awardFinalizedExp(tx, id) : null;
     });
-    if (count === 0) {
-      throw new ConflictException('Event has already been moderated');
+    this.notifier.decisionMade(event, data.status, data.declineReason ?? null, award?.organizerExp ?? 0);
+    if (award && data.startsAt) {
+      this.notifier.participantsFinalized(
+        { id, name: event.name, startsAt: data.startsAt },
+        award.participantIds,
+      );
     }
-    this.notifier.decisionMade(event, data.status, data.declineReason ?? null);
     return this.toResponse(await this.findEventOrThrow(id));
   }
 

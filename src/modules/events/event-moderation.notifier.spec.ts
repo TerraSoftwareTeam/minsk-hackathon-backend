@@ -114,7 +114,7 @@ describe('EventModerationNotifier', () => {
     });
 
     it('an admin event FINALIZED by the votes: every admin is told', async () => {
-      notifier.finalizedByVotes('event-1');
+      notifier.finalizedByVotes('event-1', []);
       await flush();
 
       expect(prisma.user.findMany).toHaveBeenCalledWith({
@@ -132,9 +132,27 @@ describe('EventModerationNotifier', () => {
       });
     });
 
+    it('an admin event FINALIZED by the votes: the participants learn the date and their exp', async () => {
+      prisma.event.findUnique.mockResolvedValue({ name: 'Trip', startsAt: new Date('2026-11-14T12:00:00Z') });
+      notifier.finalizedByVotes('event-1', ['pupil-1', 'pupil-2']);
+      await flush();
+
+      expect(push.sendToUsers).toHaveBeenCalledTimes(2);
+      expect(push.sendToUsers).toHaveBeenCalledWith(['pupil-1', 'pupil-2'], {
+        title: 'Мероприятие состоится',
+        body: '«Trip» пройдёт 14 ноября в 15:00. +5 exp за участие',
+        data: {
+          type: MODERATION_PUSH_TYPES.FINALIZED,
+          eventId: 'event-1',
+          status: EventStatuses.FINALIZED,
+          exp: '5',
+        },
+      });
+    });
+
     it('nobody is pushed for a deleted event', async () => {
       prisma.event.findUnique.mockResolvedValue(null);
-      notifier.finalizedByVotes('event-1');
+      notifier.finalizedByVotes('event-1', ['pupil-1']);
       await flush();
       expect(push.sendToUsers).not.toHaveBeenCalled();
     });
@@ -157,6 +175,39 @@ describe('EventModerationNotifier', () => {
         title,
         body,
         data: { type: MODERATION_PUSH_TYPES.DECISION, eventId: 'event-1', status },
+      });
+    });
+
+    it('FINALIZED: adds the exp the organizer got', async () => {
+      notifier.decisionMade(event, EventStatuses.FINALIZED, null, 25);
+      await flush();
+      expect(push.sendToUsers).toHaveBeenCalledWith(['pupil-1'], {
+        title: 'Мероприятие одобрено',
+        body: 'Администрация одобрила «Trip». +25 exp за организацию',
+        data: {
+          type: MODERATION_PUSH_TYPES.DECISION,
+          eventId: 'event-1',
+          status: EventStatuses.FINALIZED,
+          exp: '25',
+        },
+      });
+    });
+
+    it('participants of an approved event learn the date and their exp', async () => {
+      notifier.participantsFinalized(
+        { id: 'event-1', name: 'Trip', startsAt: new Date('2026-11-14T12:00:00Z') },
+        ['pupil-2'],
+      );
+      await flush();
+      expect(push.sendToUsers).toHaveBeenCalledWith(['pupil-2'], {
+        title: 'Мероприятие состоится',
+        body: '«Trip» пройдёт 14 ноября в 15:00. +5 exp за участие',
+        data: {
+          type: MODERATION_PUSH_TYPES.FINALIZED,
+          eventId: 'event-1',
+          status: EventStatuses.FINALIZED,
+          exp: '5',
+        },
       });
     });
 

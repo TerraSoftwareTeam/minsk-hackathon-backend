@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { EventStatuses, UserRoles } from '../../../prisma/generated/prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PushService } from '../notifications/push.service';
+import { PARTICIPANT_EXP } from './event-exp';
 
 export const MODERATION_PUSH_TYPES = {
   TEACHER: 'EVENT_TEACHER_MODERATION',
@@ -9,6 +10,8 @@ export const MODERATION_PUSH_TYPES = {
   DECISION: 'EVENT_DECISION',
   SENT_TO_ADMIN: 'EVENT_SENT_TO_ADMIN',
   FINALIZED_BY_VOTES: 'EVENT_FINALIZED_BY_VOTES',
+  /** To the participants (voters) of an event that takes place. */
+  FINALIZED: 'EVENT_FINALIZED',
 } as const;
 
 export type DecisionStatus = 'ON_VOTE' | 'DECLINED' | 'FINALIZED' | 'DECLINED_BY_ADMIN';
@@ -33,6 +36,15 @@ const DECISION_TEXTS: Record<DecisionStatus, { title: string; body: (name: strin
 };
 
 const MAX_REASON_IN_PUSH = 200;
+
+/** Event dates are shown in the school's local time. */
+const STARTS_AT_FORMAT = new Intl.DateTimeFormat('ru-RU', {
+  timeZone: 'Europe/Minsk',
+  day: 'numeric',
+  month: 'long',
+  hour: '2-digit',
+  minute: '2-digit',
+});
 
 type NotifiedEvent = {
   id: string;
@@ -107,24 +119,53 @@ export class EventModerationNotifier {
     });
   }
 
-  finalizedByVotes(eventId: string): void {
+  finalizedByVotes(eventId: string, participantIds: string[]): void {
     this.run(async () => {
       const [event, admins] = await Promise.all([
-        this.prisma.event.findUnique({ where: { id: eventId }, select: { name: true } }),
+        this.prisma.event.findUnique({
+          where: { id: eventId },
+          select: { name: true, startsAt: true },
+        }),
         this.adminIds(),
       ]);
       if (!event) {
         return;
       }
-      await this.push.sendToUsers(admins, {
-        title: 'Школьное мероприятие состоится',
-        body: `«${event.name}» набрало нужное число голосов`,
-        data: {
-          type: MODERATION_PUSH_TYPES.FINALIZED_BY_VOTES,
-          eventId,
-          status: EventStatuses.FINALIZED,
-        },
-      });
+      await Promise.all([
+        this.push.sendToUsers(admins, {
+          title: 'Школьное мероприятие состоится',
+          body: `«${event.name}» набрало нужное число голосов`,
+          data: {
+            type: MODERATION_PUSH_TYPES.FINALIZED_BY_VOTES,
+            eventId,
+            status: EventStatuses.FINALIZED,
+          },
+        }),
+        event.startsAt
+          ? this.sendToParticipants({ id: eventId, name: event.name, startsAt: event.startsAt }, participantIds)
+          : Promise.resolve(),
+      ]);
+    });
+  }
+
+  /** The event takes place: every participant learns the date and the exp they got. */
+  participantsFinalized(event: { id: string; name: string; startsAt: Date }, participantIds: string[]): void {
+    this.run(() => this.sendToParticipants(event, participantIds));
+  }
+
+  private sendToParticipants(
+    event: { id: string; name: string; startsAt: Date },
+    participantIds: string[],
+  ): Promise<void> {
+    return this.push.sendToUsers(participantIds, {
+      title: 'Мероприятие состоится',
+      body: `«${event.name}» пройдёт ${STARTS_AT_FORMAT.format(event.startsAt)}. ${expCaption(PARTICIPANT_EXP, 'участие')}`,
+      data: {
+        type: MODERATION_PUSH_TYPES.FINALIZED,
+        eventId: event.id,
+        status: EventStatuses.FINALIZED,
+        exp: String(PARTICIPANT_EXP),
+      },
     });
   }
 
@@ -132,18 +173,21 @@ export class EventModerationNotifier {
     event: { id: string; name: string; initiatorId: string },
     status: DecisionStatus,
     declineReason: string | null = null,
+    /** Exp the initiator got for organizing (FINALIZED); 0 = no exp caption. */
+    exp = 0,
   ): void {
     const text = DECISION_TEXTS[status];
     let body = text.body(event.name);
     if (declineReason) {
       body += `. Причина: ${truncate(declineReason, MAX_REASON_IN_PUSH)}`;
     }
+    const data: Record<string, string> = { type: MODERATION_PUSH_TYPES.DECISION, eventId: event.id, status };
+    if (exp > 0) {
+      body += `. ${expCaption(exp, 'организацию')}`;
+      data.exp = String(exp);
+    }
     this.run(() =>
-      this.push.sendToUsers([event.initiatorId], {
-        title: text.title,
-        body,
-        data: { type: MODERATION_PUSH_TYPES.DECISION, eventId: event.id, status },
-      }),
+      this.push.sendToUsers([event.initiatorId], { title: text.title, body, data }),
     );
   }
 
@@ -160,6 +204,10 @@ export class EventModerationNotifier {
       this.logger.error('Failed to notify moderators', error instanceof Error ? error.stack : error),
     );
   }
+}
+
+function expCaption(exp: number, forWhat: string): string {
+  return `+${exp} exp за ${forWhat}`;
 }
 
 function truncate(text: string, maxLength: number): string {

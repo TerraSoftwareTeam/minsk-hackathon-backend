@@ -105,11 +105,13 @@ describe('EventsService', () => {
     awaitsAdmin: jest.Mock;
     finalizedByVotes: jest.Mock;
     decisionMade: jest.Mock;
+    participantsFinalized: jest.Mock;
   };
   let tx: {
     $queryRaw: jest.Mock;
     eventVote: { create: jest.Mock; count: jest.Mock; deleteMany: jest.Mock };
-    event: { update: jest.Mock };
+    event: { update: jest.Mock; updateMany: jest.Mock; findUniqueOrThrow: jest.Mock };
+    user: { update: jest.Mock; updateMany: jest.Mock };
   };
 
   beforeEach(() => {
@@ -150,7 +152,21 @@ describe('EventsService', () => {
         count: jest.fn().mockResolvedValue(1),
         deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
-      event: { update: jest.fn().mockResolvedValue({}) },
+      event: {
+        update: jest.fn().mockResolvedValue({}),
+        // Moderation updates the status in a transaction: the same mock as outside it.
+        updateMany: prisma.event.updateMany,
+        // Who gets exp when the event is FINALIZED: the pupil author voted too.
+        findUniqueOrThrow: jest.fn().mockResolvedValue({
+          initiatorId: pupil.id,
+          initiator: { role: UserRoles.PUPIL },
+          votes: [{ voterId: pupil.id }, { voterId: otherPupil.id }],
+        }),
+      },
+      user: {
+        update: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
     };
     images = {
       uploadImage: jest.fn().mockResolvedValue({ id: 'img-new', url: 'https://cdn/new.jpg' }),
@@ -161,6 +177,7 @@ describe('EventsService', () => {
       awaitsAdmin: jest.fn(),
       finalizedByVotes: jest.fn(),
       decisionMade: jest.fn(),
+      participantsFinalized: jest.fn(),
     };
     service = new EventsService(
       prisma as unknown as PrismaService,
@@ -480,6 +497,7 @@ describe('EventsService', () => {
         expect.objectContaining({ id: 'event-1', initiatorId: pupil.id }),
         EventStatuses.ON_VOTE,
         null,
+        0,
       );
     });
 
@@ -493,6 +511,7 @@ describe('EventsService', () => {
         expect.objectContaining({ initiatorId: pupil.id }),
         EventStatuses.DECLINED,
         'Pick another date',
+        0,
       );
     });
 
@@ -744,7 +763,70 @@ describe('EventsService', () => {
         expect.objectContaining({ initiatorId: pupil.id }),
         EventStatuses.FINALIZED,
         null,
+        25,
       );
+    });
+
+    it('FINALIZED: the pupil author gets 25 exp, every other voter 5 exp, and the voters are pushed', async () => {
+      prisma.event.findUnique
+        .mockResolvedValueOnce(onAdminModeration())
+        .mockResolvedValueOnce(storedEvent({ status: EventStatuses.FINALIZED, startsAt: FUTURE }));
+
+      await service.adminApprove(admin, 'event-1', approval);
+
+      expect(tx.user.update).toHaveBeenCalledWith({
+        where: { id: pupil.id },
+        data: { exp: { increment: 25 } },
+      });
+      expect(tx.user.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: [otherPupil.id] } },
+        data: { exp: { increment: 5 } },
+      });
+      expect(notifier.participantsFinalized).toHaveBeenCalledWith(
+        { id: 'event-1', name: 'Trip', startsAt: FUTURE },
+        [otherPupil.id],
+      );
+    });
+
+    it("FINALIZED teacher's event: no exp for the teacher, the voters still get theirs", async () => {
+      prisma.event.findUnique.mockResolvedValue(
+        storedEvent({
+          status: EventStatuses.ON_ADMIN_MODERATION,
+          initiatorId: teacher.id,
+          initiator: teacher,
+          createdByRole: UserRoles.TEACHER,
+        }),
+      );
+      tx.event.findUniqueOrThrow.mockResolvedValue({
+        initiatorId: teacher.id,
+        initiator: { role: UserRoles.TEACHER },
+        votes: [{ voterId: pupil.id }],
+      });
+
+      await service.adminApprove(admin, 'event-1', approval);
+
+      expect(tx.user.update).not.toHaveBeenCalled();
+      expect(tx.user.updateMany.mock.calls[0][0].where).toEqual({ id: { in: [pupil.id] } });
+      expect(notifier.decisionMade).toHaveBeenCalledWith(
+        expect.objectContaining({ initiatorId: teacher.id }),
+        EventStatuses.FINALIZED,
+        null,
+        0,
+      );
+      expect(notifier.participantsFinalized).toHaveBeenCalledWith(expect.anything(), [pupil.id]);
+    });
+
+    it('no exp and no participant push when the event is declined or the approval lost a race', async () => {
+      await service.adminDecline(admin, 'event-1', {});
+      prisma.event.updateMany.mockResolvedValue({ count: 0 });
+      await expect(service.adminApprove(admin, 'event-1', approval)).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+
+      expect(tx.event.findUniqueOrThrow).not.toHaveBeenCalled();
+      expect(tx.user.update).not.toHaveBeenCalled();
+      expect(tx.user.updateMany).not.toHaveBeenCalled();
+      expect(notifier.participantsFinalized).not.toHaveBeenCalled();
     });
 
     it("a teacher's event: the admin decision goes to the teacher who created it", async () => {
@@ -766,6 +848,7 @@ describe('EventsService', () => {
         expect.objectContaining({ initiatorId: teacher.id }),
         EventStatuses.DECLINED_BY_ADMIN,
         'No budget',
+        0,
       );
     });
 
@@ -780,6 +863,7 @@ describe('EventsService', () => {
         expect.objectContaining({ initiatorId: pupil.id }),
         EventStatuses.DECLINED_BY_ADMIN,
         'Not this term',
+        0,
       );
     });
 
@@ -897,7 +981,15 @@ describe('EventsService', () => {
         });
         expect(result.status).toBe(EventStatuses.FINALIZED);
         expect(notifier.awaitsAdmin).not.toHaveBeenCalled();
-        expect(notifier.finalizedByVotes).toHaveBeenCalledWith('event-1');
+        expect(tx.user.update).toHaveBeenCalledWith({
+          where: { id: pupil.id },
+          data: { exp: { increment: 25 } },
+        });
+        expect(tx.user.updateMany).toHaveBeenCalledWith({
+          where: { id: { in: [otherPupil.id] } },
+          data: { exp: { increment: 5 } },
+        });
+        expect(notifier.finalizedByVotes).toHaveBeenCalledWith('event-1', [otherPupil.id]);
       });
 
       it('Conflict, no vote stored, once the date has come', async () => {
