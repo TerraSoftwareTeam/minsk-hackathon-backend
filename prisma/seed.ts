@@ -163,6 +163,8 @@ type SeedEvent = {
   week: number;
   time: string;
   voteThreshold: number;
+  /** Optional cap on participants (>= voteThreshold); omitted = unlimited. */
+  maxParticipants?: number;
   /** Votes cast; defaults to the threshold for passed events, 0 otherwise. */
   votes?: number;
   /** Likes; defaults to a few more than the votes for likable events, 0 otherwise. */
@@ -590,7 +592,7 @@ const PAST: SeedEvent[] = [
   },
 ];
 
-/** Upcoming events in every pending status. Pending ones must be more than 3 days before their date. */
+/** Upcoming events in every pending status. Pending ones must be before their deadline (5 days before the date; 3 on admin moderation). */
 const UPCOMING: SeedEvent[] = [
   // teacher queues
   {
@@ -676,7 +678,9 @@ const UPCOMING: SeedEvent[] = [
     week: 1,
     time: '10:00',
     voteThreshold: 12,
-    votes: 7,
+    // Past the threshold: pupils keep joining until the cap or until voting closes.
+    maxParticipants: 22,
+    votes: 14,
   },
   {
     name: 'Квиз по истории Беларуси',
@@ -700,6 +704,7 @@ const UPCOMING: SeedEvent[] = [
     week: 3,
     time: '19:00',
     voteThreshold: 15,
+    maxParticipants: 60,
     votes: 10,
   },
   {
@@ -821,8 +826,9 @@ function likesFor(event: SeedEvent): number {
   );
 }
 
-/** Every pending stage ends this long before the date, as in src/modules/events/event-deadlines.ts. */
-const DECIDED_BEFORE_START_MS = 3 * DAY_MS;
+/** Deadlines before the date, as in src/modules/events/event-deadlines.ts. */
+const VOTING_CLOSES_BEFORE_START_MS = 5 * DAY_MS;
+const ADMIN_DECIDES_BEFORE_START_MS = 3 * DAY_MS;
 
 /** Requests are filed 1-3 weeks before the planned date, never in the future. */
 function seedCreatedAt(event: SeedEvent, planned: Date, now: Date): Date {
@@ -850,20 +856,26 @@ function assertConsistent(
     fail(`${votes} votes but only ${voters.length} pupils in scope`);
   if (PASSED.has(event.status) && votes < event.voteThreshold)
     fail('passed the vote without enough votes');
-  if (
-    (event.status === ON_VOTE || event.status === EXPIRED) &&
-    votes >= event.voteThreshold
-  ) {
-    fail('reached the threshold but did not move on');
-  }
+  if (event.maxParticipants !== undefined && event.maxParticipants < event.voteThreshold)
+    fail('maxParticipants below voteThreshold');
+  if (event.maxParticipants !== undefined && votes > event.maxParticipants)
+    fail(`${votes} votes but at most ${event.maxParticipants} participants`);
+  if (event.status === ON_VOTE && votes === event.maxParticipants)
+    fail('reached maxParticipants but did not move on');
+  if (event.status === EXPIRED && votes >= event.voteThreshold)
+    fail('expired with enough votes: voting would have moved it on');
   if (createdAt.getTime() >= planned.getTime())
     fail('created after its date: the pupil chooses a date in the future');
+  const pastBefore = (ms: number) => planned.getTime() - ms <= now.getTime();
+  const overdue =
+    event.status === ON_ADMIN_MODERATION
+      ? pastBefore(ADMIN_DECIDES_BEFORE_START_MS)
+      : pastBefore(VOTING_CLOSES_BEFORE_START_MS);
   const pending = [
     ON_MODERATION,
     ON_VOTE,
     ON_ADMIN_MODERATION,
   ] as EventStatuses[];
-  const overdue = planned.getTime() - DECIDED_BEFORE_START_MS <= now.getTime();
   const likes = likesFor(event);
   if (likes > ALL_PUPILS.length)
     fail(`${likes} likes but only ${ALL_PUPILS.length} pupils in the school`);
@@ -876,9 +888,9 @@ function assertConsistent(
   )
     fail('moved past moderation in a class that has no teacher');
   if (pending.includes(event.status) && overdue)
-    fail('pending, but its deadline (3 days before its date) has passed');
-  if (event.status === EXPIRED && !overdue)
-    fail('expired before its deadline (3 days before its date)');
+    fail('pending, but its deadline has passed');
+  if (event.status === EXPIRED && !pastBefore(ADMIN_DECIDES_BEFORE_START_MS))
+    fail('expired before its deadline');
 }
 
 async function main(): Promise<void> {
@@ -962,6 +974,7 @@ async function main(): Promise<void> {
             status: event.status,
             declineReason: event.declineReason ?? null,
             voteThreshold: event.voteThreshold,
+            maxParticipants: event.maxParticipants ?? null,
             // The author chooses the date on creation, it is kept in every status.
             startsAt: planned,
             initiatorId: initiator,

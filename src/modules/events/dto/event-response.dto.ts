@@ -38,8 +38,9 @@ export class EventResponseDto {
     description:
       'Pupil event: ON_MODERATION (teacher) -> ON_VOTE (pupils) -> ON_ADMIN_MODERATION (admin) -> FINALIZED. ' +
       'Teacher event: starts ON_VOTE, then the same (never ON_MODERATION or DECLINED). ' +
-      'Admin event: ON_VOTE -> FINALIZED when the votes reach voteThreshold. ' +
-      'DECLINED / DECLINED_BY_ADMIN: rejected by the teacher / admin. EXPIRED: not decided before its deadline (see votingClosesAt)',
+      'ON_VOTE lasts until maxParticipants joined or until votingClosesAt; then with at least voteThreshold votes it moves on ' +
+      '(admin event: straight to FINALIZED), otherwise EXPIRED. ' +
+      'DECLINED / DECLINED_BY_ADMIN: rejected by the teacher / admin. EXPIRED: not decided before its deadline (see deadline)',
   })
   status!: EventStatuses;
 
@@ -64,6 +65,16 @@ export class EventResponseDto {
   voteThreshold!: number;
 
   @ApiProperty({
+    type: 'integer',
+    example: 30,
+    nullable: true,
+    description:
+      'Maximum participants (votes; the pupil organizer counts), >= voteThreshold. null = unlimited. ' +
+      'Voting stays open until it is reached or until votingClosesAt',
+  })
+  maxParticipants!: number | null;
+
+  @ApiProperty({
     example: null,
     nullable: true,
     type: Date,
@@ -76,10 +87,20 @@ export class EventResponseDto {
   @ApiProperty({
     example: '2026-12-06T10:00:00.000Z',
     description:
-      'Computed: startsAt - 3 days, for every role. Teacher moderation, voting and admin moderation must finish by then, ' +
-      'otherwise the event becomes EXPIRED',
+      'Computed: startsAt - 5 days, for every role. Teacher moderation and voting end then: ' +
+      'ON_MODERATION -> EXPIRED; ON_VOTE -> moves on with at least voteThreshold votes, otherwise EXPIRED',
   })
   votingClosesAt!: Date;
+
+  @ApiProperty({
+    example: '2026-12-02T10:00:00.000Z',
+    nullable: true,
+    type: Date,
+    description:
+      'Computed: when the current pending stage ends. ON_MODERATION, ON_VOTE: votingClosesAt (startsAt - 5 days); ' +
+      'ON_ADMIN_MODERATION: startsAt - 3 days, the admin must decide by then, otherwise EXPIRED. null once decided',
+  })
+  deadline!: Date | null;
 
   @ApiProperty({
     example: 0.66,

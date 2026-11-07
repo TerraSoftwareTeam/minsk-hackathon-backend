@@ -8,14 +8,22 @@ model Event {
 
   declineReason String?
 
-  /// Votes needed to move the event from ON_VOTE to ON_ADMIN_MODERATION. Always >= 1.
+  /// Votes (participants) the event needs by the time voting closes to move on from
+  /// ON_VOTE (to ON_ADMIN_MODERATION, or FINALIZED for an admin event). Always >= 1.
   voteThreshold Int
+
+  /// Optional cap on participants (pupils who voted, the pupil organizer included);
+  /// null = unlimited. Always >= voteThreshold. Voting stays open past voteThreshold
+  /// until this many pupils joined (the event then moves on at once) or voting closes.
+  maxParticipants Int?
 
   /// When the event takes place: chosen by the author on creation, whatever their role,
   /// and never changed (moderators only approve or decline). Present in every status;
   /// only old events rejected before authors chose dates may have none.
-  /// It sets the deadline of every pending stage (teacher moderation, voting, admin
-  /// moderation): 3 days before it (event-deadlines.ts); not decided by then -> EXPIRED.
+  /// It sets the deadlines (event-deadlines.ts): teacher moderation and voting end 5 days
+  /// before it, admin moderation 3 days before it. Voting closes at maxParticipants or at
+  /// its deadline: voteThreshold reached -> the event moves on, otherwise EXPIRED. A stage
+  /// of moderation not decided by its deadline -> EXPIRED.
   startsAt DateTime?
 
   initiator   User   @relation("EventInitiator", fields: [initiatorId], references: [id])
@@ -25,7 +33,7 @@ model Event {
   /// PUPIL: ON_MODERATION (teachers) -> ON_VOTE -> ON_ADMIN_MODERATION -> FINALIZED.
   /// TEACHER: starts ON_VOTE (no teacher moderation) -> ON_ADMIN_MODERATION -> FINALIZED.
   /// ADMIN: a SCHOOL event, no moderation: ON_VOTE -> FINALIZED when the votes reach
-  /// voteThreshold, EXPIRED 3 days before startsAt otherwise.
+  /// voteThreshold by the time voting closes, EXPIRED otherwise.
   createdByRole UserRoles @default(PUPIL)
 
   // No moderator column: the moderators are derived from the status. ON_MODERATION:

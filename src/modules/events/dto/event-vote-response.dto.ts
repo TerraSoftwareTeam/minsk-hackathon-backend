@@ -15,14 +15,24 @@ export class EventVoteResponseDto {
   @ApiProperty({
     type: 'integer',
     example: 15,
-    description: 'Votes needed to move the event to ON_ADMIN_MODERATION',
+    description: 'Minimum votes the event needs by the time voting closes',
   })
   voteThreshold!: number;
 
   @ApiProperty({
+    type: 'integer',
+    example: 30,
+    nullable: true,
+    description: 'Maximum participants: the vote that reaches it closes voting at once. null = unlimited',
+  })
+  maxParticipants!: number | null;
+
+  @ApiProperty({
     enum: EventStatuses,
     example: EventStatuses.ON_VOTE,
-    description: 'Status after this vote: ON_ADMIN_MODERATION once the threshold is reached',
+    description:
+      'Status after this vote: ON_VOTE until maxParticipants is reached; the vote that reaches it moves the event to ' +
+      'ON_ADMIN_MODERATION (FINALIZED for an admin event)',
   })
   status!: EventStatuses;
 }

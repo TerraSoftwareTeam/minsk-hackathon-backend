@@ -64,7 +64,8 @@ export class CreateEventDto {
     minimum: 1,
     maximum: 10000,
     description:
-      'Votes needed during ON_VOTE: they send a pupil or teacher event to admin moderation, and make an admin event FINALIZED. ' +
+      'Minimum participants (votes) by the time voting closes: then a pupil or teacher event goes to admin moderation, ' +
+      'an admin event becomes FINALIZED; with fewer the event becomes EXPIRED. ' +
       "A pupil's own vote is cast on creation (the organizer is a participant) and counts, so a pupil event needs at least 2",
   })
   @IsInt()
@@ -72,13 +73,29 @@ export class CreateEventDto {
   @Max(10000)
   voteThreshold!: number;
 
+  @ApiPropertyOptional({
+    type: 'integer',
+    example: 30,
+    minimum: 1,
+    maximum: 10000,
+    description:
+      'Any role. Maximum participants (votes; the pupil organizer counts), at least voteThreshold; omitted = unlimited. ' +
+      'Voting stays open past voteThreshold until this many pupils joined (the event then moves on at once) ' +
+      'or until voting closes, 5 days before startsAt',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(10000)
+  maxParticipants?: number;
+
   @ApiProperty({
     example: '2026-12-05T12:00:00+03:00',
     format: 'date-time',
     description:
       'Required for every role: when the event takes place, ISO 8601 date-time with a timezone (Z or ±hh:mm), in the future. ' +
       'Never changed afterwards, not even by a moderator (who can only approve or decline). ' +
-      'The event must be decided (teacher moderation, voting, admin moderation) 3 days before it, otherwise it becomes EXPIRED',
+      'Teacher moderation and voting end 5 days before it, admin moderation 3 days before it',
   })
   @IsISO8601({ strict: true })
   @Matches(/T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/, {

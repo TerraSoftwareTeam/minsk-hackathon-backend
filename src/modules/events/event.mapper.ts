@@ -1,7 +1,7 @@
 import { Event, User } from '../../../prisma/generated/prisma/client';
 import { EventResponseDto } from './dto/event-response.dto';
 import { EventUserResponseDto } from './dto/event-user-response.dto';
-import { decisionDeadline } from './event-deadlines';
+import { decisionDeadline, isPending, votingClosesAt } from './event-deadlines';
 import { VotingEventResponseDto } from './dto/voting-event-response.dto';
 
 export type EventWithUsers = Event & {
@@ -34,8 +34,10 @@ export function toEventResponse(
     createdByRole: event.createdByRole,
     declineReason: event.declineReason,
     voteThreshold: event.voteThreshold,
+    maxParticipants: event.maxParticipants,
     startsAt: event.startsAt,
-    votingClosesAt: decisionDeadline(event),
+    votingClosesAt: votingClosesAt(event),
+    deadline: isPending(event.status) ? decisionDeadline(event) : null,
     successProbability,
     imageUrl: event.image?.url ?? null,
     likesCount,

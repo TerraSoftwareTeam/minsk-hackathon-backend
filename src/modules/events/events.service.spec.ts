@@ -45,10 +45,20 @@ const FUTURE = new Date(Date.now() + 7 * DAY_MS);
 const PAST = new Date(Date.now() - 60 * 1000);
 const RECENT = new Date(Date.now() - DAY_MS);
 const OVERDUE = new Date(Date.now() - 31 * DAY_MS);
-/** An event this soon is past its deadline (3 days before the date). */
+/** An event this soon is past every deadline (admin moderation: 3 days before the date). */
 const SOON = new Date(Date.now() + 2 * DAY_MS);
+/** Past the voting deadline (5 days before the date), still within admin moderation (3 days). */
+const IN_4_DAYS = new Date(Date.now() + 4 * DAY_MS);
 
-const BEFORE_DEADLINE = { startsAt: { gt: expect.any(Date) } };
+const BEFORE_DEADLINE = {
+  OR: [
+    {
+      status: { in: [EventStatuses.ON_MODERATION, EventStatuses.ON_VOTE] },
+      startsAt: { gt: expect.any(Date) },
+    },
+    { status: EventStatuses.ON_ADMIN_MODERATION, startsAt: { gt: expect.any(Date) } },
+  ],
+};
 
 const DATE = FUTURE.toISOString();
 
@@ -72,6 +82,7 @@ const storedEvent = (over: Partial<EventWithUsers> = {}): EventWithUsers => ({
   status: EventStatuses.ON_MODERATION,
   declineReason: null,
   voteThreshold: 10,
+  maxParticipants: null,
   startsAt: FUTURE,
   initiatorId: pupil.id,
   createdByRole: UserRoles.PUPIL,
@@ -146,7 +157,16 @@ describe('EventsService', () => {
     tx = {
       $queryRaw: jest
         .fn()
-        .mockResolvedValue([{ status: EventStatuses.ON_VOTE, voteThreshold: 10, createdAt: RECENT }]),
+        .mockResolvedValue([
+          {
+            status: EventStatuses.ON_VOTE,
+            voteThreshold: 10,
+            maxParticipants: null,
+            createdByRole: UserRoles.PUPIL,
+            createdAt: RECENT,
+            startsAt: FUTURE,
+          },
+        ]),
       eventVote: {
         create: jest.fn().mockResolvedValue({}),
         count: jest.fn().mockResolvedValue(1),
@@ -272,7 +292,7 @@ describe('EventsService', () => {
         expect(result.createdByRole).toBe(UserRoles.TEACHER);
         expect(result.moderators).toEqual([]);
         expect(result.startsAt).toEqual(FUTURE);
-        expect(result.votingClosesAt.getTime()).toBe(FUTURE.getTime() - 3 * DAY_MS);
+        expect(result.votingClosesAt.getTime()).toBe(FUTURE.getTime() - 5 * DAY_MS);
         expect(notifier.awaitsTeachers).not.toHaveBeenCalled();
       });
 
@@ -317,7 +337,7 @@ describe('EventsService', () => {
         prisma.event.create.mockResolvedValue(adminEvent());
       });
 
-      it('no moderation: SCHOOL, ON_VOTE, with the date; voting closes 3 days before it', async () => {
+      it('no moderation: SCHOOL, ON_VOTE, with the date; voting closes 5 days before it', async () => {
         const result = await service.create(admin, {
           name: 'Trip',
           voteThreshold: 10,
@@ -337,7 +357,7 @@ describe('EventsService', () => {
           createdByRole: UserRoles.ADMIN,
         });
         expect(result.startsAt).toEqual(FUTURE);
-        expect(result.votingClosesAt.getTime()).toBe(FUTURE.getTime() - 3 * DAY_MS);
+        expect(result.votingClosesAt.getTime()).toBe(FUTURE.getTime() - 5 * DAY_MS);
         expect(result.moderators).toEqual([]);
         expect(notifier.awaitsTeachers).not.toHaveBeenCalled();
       });
@@ -400,7 +420,7 @@ describe('EventsService', () => {
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
-    it('the pupil chooses the date; voting closes 3 days before it', async () => {
+    it('the pupil chooses the date; voting closes 5 days before it', async () => {
       const result = await service.create(pupil, {
         name: 'Trip',
         voteThreshold: 10,
@@ -409,7 +429,37 @@ describe('EventsService', () => {
       });
       expect(prisma.event.create.mock.calls[0][0].data.startsAt).toEqual(FUTURE);
       expect(result.startsAt).toEqual(FUTURE);
-      expect(result.votingClosesAt.getTime()).toBe(FUTURE.getTime() - 3 * DAY_MS);
+      expect(result.votingClosesAt.getTime()).toBe(FUTURE.getTime() - 5 * DAY_MS);
+      expect(result.deadline).toEqual(result.votingClosesAt);
+      expect(result.maxParticipants).toBeNull();
+    });
+
+    it('stores maxParticipants', async () => {
+      await service.create(pupil, {
+        name: 'Trip',
+        voteThreshold: 10,
+        maxParticipants: 10,
+        category: EventCategories.SPORTS,
+        startsAt: DATE,
+      });
+      expect(prisma.event.create.mock.calls[0][0].data.maxParticipants).toBe(10);
+    });
+
+    it.each([
+      ['pupil', pupil],
+      ['teacher', teacher],
+      ['admin', admin],
+    ])('BadRequest, nothing created, when a %s sets maxParticipants below voteThreshold', async (_, actor) => {
+      await expect(
+        service.create(actor, {
+          name: 'Trip',
+          voteThreshold: 10,
+          maxParticipants: 9,
+          category: EventCategories.SPORTS,
+          startsAt: DATE,
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.event.create).not.toHaveBeenCalled();
     });
 
     it('Conflict on a duplicate name', async () => {
@@ -1027,11 +1077,18 @@ describe('EventsService', () => {
         startsAt,
         initiator: { class: null },
       });
-      const lockedAdminEvent = (startsAt: Date, voteThreshold = 10) => [
-        { status: EventStatuses.ON_VOTE, voteThreshold, createdByRole: UserRoles.ADMIN, createdAt: OVERDUE, startsAt },
+      const lockedAdminEvent = (startsAt: Date, maxParticipants: number | null = null) => [
+        {
+          status: EventStatuses.ON_VOTE,
+          voteThreshold: 10,
+          maxParticipants,
+          createdByRole: UserRoles.ADMIN,
+          createdAt: OVERDUE,
+          startsAt,
+        },
       ];
 
-      it('voting stays open until 3 days before the date, even more than a month after the creation', async () => {
+      it('voting stays open until 5 days before the date, even more than a month after the creation', async () => {
         prisma.event.findUnique.mockResolvedValue(adminTarget(FUTURE));
         tx.$queryRaw.mockResolvedValue(lockedAdminEvent(FUTURE));
         tx.eventVote.count.mockResolvedValue(3);
@@ -1042,10 +1099,19 @@ describe('EventsService', () => {
         });
       });
 
-      it('the vote that reaches the threshold finalizes it: no admin moderation', async () => {
+      it('voting stays open past the threshold when there is no maximum', async () => {
         prisma.event.findUnique.mockResolvedValue(adminTarget(FUTURE));
         tx.$queryRaw.mockResolvedValue(lockedAdminEvent(FUTURE));
-        tx.eventVote.count.mockResolvedValue(10);
+        tx.eventVote.count.mockResolvedValue(25);
+
+        await expect(service.vote(pupil, 'event-1')).resolves.toMatchObject({ status: EventStatuses.ON_VOTE });
+        expect(tx.event.update).not.toHaveBeenCalled();
+      });
+
+      it('the vote that reaches maxParticipants finalizes it: no admin moderation', async () => {
+        prisma.event.findUnique.mockResolvedValue(adminTarget(FUTURE));
+        tx.$queryRaw.mockResolvedValue(lockedAdminEvent(FUTURE, 12));
+        tx.eventVote.count.mockResolvedValue(12);
 
         const result = await service.vote(pupil, 'event-1');
 
@@ -1066,8 +1132,8 @@ describe('EventsService', () => {
         expect(notifier.finalizedByVotes).toHaveBeenCalledWith('event-1', [otherPupil.id]);
       });
 
-      it('Conflict, no vote stored, 3 days before the date', async () => {
-        prisma.event.findUnique.mockResolvedValue(adminTarget(SOON));
+      it('Conflict, no vote stored, 5 days before the date', async () => {
+        prisma.event.findUnique.mockResolvedValue(adminTarget(IN_4_DAYS));
 
         await expect(service.vote(pupil, 'event-1')).rejects.toBeInstanceOf(ConflictException);
         expect(prisma.$transaction).not.toHaveBeenCalled();
@@ -1123,14 +1189,28 @@ describe('EventsService', () => {
         eventId: 'event-1',
         votesCount: 3,
         voteThreshold: 10,
+        maxParticipants: null,
         status: EventStatuses.ON_VOTE,
       });
       expect(notifier.awaitsAdmin).not.toHaveBeenCalled();
       expect(notifier.finalizedByVotes).not.toHaveBeenCalled();
     });
 
-    it('the vote that reaches the threshold moves the event to ON_ADMIN_MODERATION', async () => {
-      tx.eventVote.count.mockResolvedValue(10);
+    it('voting stays open past the threshold: the event waits for its maximum or for voting to close', async () => {
+      tx.eventVote.count.mockResolvedValue(11);
+
+      const result = await service.vote(pupil, 'event-1');
+
+      expect(result).toMatchObject({ status: EventStatuses.ON_VOTE, votesCount: 11, maxParticipants: null });
+      expect(tx.event.update).not.toHaveBeenCalled();
+      expect(notifier.awaitsAdmin).not.toHaveBeenCalled();
+    });
+
+    it('the vote that reaches maxParticipants moves the event to ON_ADMIN_MODERATION', async () => {
+      tx.$queryRaw.mockResolvedValue([
+        { status: EventStatuses.ON_VOTE, voteThreshold: 10, maxParticipants: 15, createdByRole: UserRoles.PUPIL, createdAt: RECENT, startsAt: FUTURE },
+      ]);
+      tx.eventVote.count.mockResolvedValue(15);
 
       const result = await service.vote(pupil, 'event-1');
 
@@ -1143,21 +1223,21 @@ describe('EventsService', () => {
       expect(notifier.finalizedByVotes).not.toHaveBeenCalled();
     });
 
-    it('threshold 1: the first vote already moves the event', async () => {
+    it('below maxParticipants the event stays ON_VOTE, even past the threshold', async () => {
       tx.$queryRaw.mockResolvedValue([
-        { status: EventStatuses.ON_VOTE, voteThreshold: 1, createdAt: RECENT },
+        { status: EventStatuses.ON_VOTE, voteThreshold: 10, maxParticipants: 15, createdByRole: UserRoles.PUPIL, createdAt: RECENT, startsAt: FUTURE },
       ]);
-      tx.eventVote.count.mockResolvedValue(1);
+      tx.eventVote.count.mockResolvedValue(14);
 
       const result = await service.vote(pupil, 'event-1');
 
-      expect(result.status).toBe(EventStatuses.ON_ADMIN_MODERATION);
+      expect(result.status).toBe(EventStatuses.ON_VOTE);
     });
 
-    it('Conflict, no vote stored, when voting has closed (3 days before the date)', async () => {
+    it('Conflict, no vote stored, when voting has closed (5 days before the date)', async () => {
       prisma.event.findUnique.mockResolvedValue({
         ...voteTarget(Scopes.SCHOOL),
-        startsAt: SOON,
+        startsAt: IN_4_DAYS,
       });
 
       await expect(service.vote(pupil, 'event-1')).rejects.toBeInstanceOf(ConflictException);
@@ -1217,24 +1297,110 @@ describe('EventsService', () => {
   });
 
   describe('expireOverdue', () => {
-    it('expires every pending event 3 days before its date, whoever created it', async () => {
+    it('expires teacher moderation 5 days before the date, admin moderation 3 days before it', async () => {
       prisma.event.updateMany.mockResolvedValue({ count: 2 });
       const now = new Date('2026-12-01T10:00:00Z');
 
       await expect(service.expireOverdue(now)).resolves.toBe(2);
       expect(prisma.event.updateMany).toHaveBeenCalledWith({
         where: {
-          status: {
-            in: [
-              EventStatuses.ON_MODERATION,
-              EventStatuses.ON_VOTE,
-              EventStatuses.ON_ADMIN_MODERATION,
-            ],
-          },
-          startsAt: { lte: new Date('2026-12-04T10:00:00Z') },
+          OR: [
+            { status: EventStatuses.ON_MODERATION, startsAt: { lte: new Date('2026-12-06T10:00:00Z') } },
+            { status: EventStatuses.ON_ADMIN_MODERATION, startsAt: { lte: new Date('2026-12-04T10:00:00Z') } },
+          ],
         },
         data: { status: EventStatuses.EXPIRED },
       });
+    });
+  });
+
+  describe('closeVoting', () => {
+    const lockedOnVote = (over: Record<string, unknown> = {}) => [
+      {
+        status: EventStatuses.ON_VOTE,
+        voteThreshold: 10,
+        maxParticipants: null,
+        initiatorId: pupil.id,
+        createdByRole: UserRoles.PUPIL,
+        createdAt: RECENT,
+        startsAt: IN_4_DAYS,
+        ...over,
+      },
+    ];
+
+    beforeEach(() => {
+      prisma.event.findMany.mockResolvedValue([{ id: 'event-1' }]);
+    });
+
+    it('finds ON_VOTE events whose voting closed, 5 days before their date', async () => {
+      prisma.event.findMany.mockResolvedValue([]);
+      const now = new Date('2026-12-01T10:00:00Z');
+
+      await expect(service.closeVoting(now)).resolves.toBe(0);
+      expect(prisma.event.findMany).toHaveBeenCalledWith({
+        where: { status: EventStatuses.ON_VOTE, startsAt: { lte: new Date('2026-12-06T10:00:00Z') } },
+        select: { id: true },
+      });
+    });
+
+    it('enough votes: a pupil or teacher event goes to admin moderation, the admins are pushed', async () => {
+      tx.$queryRaw.mockResolvedValue(lockedOnVote());
+      tx.eventVote.count.mockResolvedValue(10);
+
+      await expect(service.closeVoting()).resolves.toBe(1);
+
+      expect(tx.event.update).toHaveBeenCalledWith({
+        where: { id: 'event-1' },
+        data: { status: EventStatuses.ON_ADMIN_MODERATION },
+      });
+      expect(notifier.awaitsAdmin).toHaveBeenCalledWith('event-1');
+    });
+
+    it('enough votes: an admin event becomes FINALIZED with exp, the participants are pushed', async () => {
+      tx.$queryRaw.mockResolvedValue(lockedOnVote({ createdByRole: UserRoles.ADMIN }));
+      tx.eventVote.count.mockResolvedValue(12);
+
+      await service.closeVoting();
+
+      expect(tx.event.update).toHaveBeenCalledWith({
+        where: { id: 'event-1' },
+        data: { status: EventStatuses.FINALIZED },
+      });
+      expect(tx.user.updateMany).toHaveBeenCalled();
+      expect(notifier.finalizedByVotes).toHaveBeenCalledWith('event-1', [otherPupil.id]);
+    });
+
+    it('below the threshold: EXPIRED, nobody pushed', async () => {
+      tx.$queryRaw.mockResolvedValue(lockedOnVote());
+      tx.eventVote.count.mockResolvedValue(9);
+
+      await service.closeVoting();
+
+      expect(tx.event.update).toHaveBeenCalledWith({
+        where: { id: 'event-1' },
+        data: { status: EventStatuses.EXPIRED },
+      });
+      expect(notifier.awaitsAdmin).not.toHaveBeenCalled();
+      expect(notifier.finalizedByVotes).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['left ON_VOTE meanwhile', { status: EventStatuses.ON_ADMIN_MODERATION }],
+      ['is not due yet', { startsAt: FUTURE }],
+    ])('skips an event that %s', async (_, over) => {
+      tx.$queryRaw.mockResolvedValue(lockedOnVote(over));
+
+      await expect(service.closeVoting()).resolves.toBe(0);
+      expect(tx.event.update).not.toHaveBeenCalled();
+    });
+
+    it('one failing event does not stop the others', async () => {
+      prisma.event.findMany.mockResolvedValue([{ id: 'event-1' }, { id: 'event-2' }]);
+      tx.$queryRaw.mockRejectedValueOnce(new Error('deadlock')).mockResolvedValue(lockedOnVote());
+      tx.eventVote.count.mockResolvedValue(9);
+      jest.spyOn(service['logger'], 'error').mockImplementation(() => undefined);
+
+      await expect(service.closeVoting()).resolves.toBe(1);
     });
   });
 
@@ -1571,6 +1737,7 @@ describe('EventsService', () => {
         eventId: 'event-1',
         votesCount: 4,
         voteThreshold: 10,
+        maxParticipants: null,
         status: EventStatuses.ON_VOTE,
       });
     });
@@ -1600,9 +1767,9 @@ describe('EventsService', () => {
       },
     );
 
-    it('Conflict, no vote removed, when voting has closed (3 days before the date)', async () => {
+    it('Conflict, no vote removed, when voting has closed (5 days before the date)', async () => {
       tx.$queryRaw.mockResolvedValue([
-        { status: EventStatuses.ON_VOTE, voteThreshold: 10, createdByRole: UserRoles.PUPIL, createdAt: RECENT, startsAt: SOON },
+        { status: EventStatuses.ON_VOTE, voteThreshold: 10, createdByRole: UserRoles.PUPIL, createdAt: RECENT, startsAt: IN_4_DAYS },
       ]);
 
       await expect(service.unvote(pupil, 'event-1')).rejects.toBeInstanceOf(ConflictException);

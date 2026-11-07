@@ -9,11 +9,13 @@ export class EventsScheduler {
   constructor(private readonly eventsService: EventsService) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
-  async expireOverdue(): Promise<void> {
+  async processDeadlines(): Promise<void> {
     try {
+      // Voting first: an event it moves to admin moderation still has 2 days there.
+      await this.eventsService.closeVoting();
       await this.eventsService.expireOverdue();
     } catch (error) {
-      this.logger.error('Failed to expire overdue events', error instanceof Error ? error.stack : error);
+      this.logger.error('Failed to process event deadlines', error instanceof Error ? error.stack : error);
     }
   }
 }

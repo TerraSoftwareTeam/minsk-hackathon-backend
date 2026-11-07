@@ -23,12 +23,12 @@ import { EventVoteResponseDto } from './dto/event-vote-response.dto';
 import { VotingEventResponseDto } from './dto/voting-event-response.dto';
 import {
   DeadlineFields,
-  PENDING_STATUSES,
   PendingStatus,
   beforeDeadline,
   isPastDeadline,
   isPending,
-  pastDeadline,
+  moderationPastDeadline,
+  votingClosed,
 } from './event-deadlines';
 import {
   OUTCOME_STATUS,
@@ -73,6 +73,7 @@ const withVoteState = (userId: string) =>
 type VotingLock = {
   status: EventStatuses;
   voteThreshold: number;
+  maxParticipants: number | null;
   initiatorId: string;
   createdByRole: UserRoles;
 } & DeadlineFields;
@@ -88,14 +89,14 @@ const TEACHER_MODERATION: ModerationStage = {
   from: EventStatuses.ON_MODERATION,
   mayModerate: (actor, event) => isTeacherOfClass(actor, event.initiator.class),
   forbiddenMessage: "Only a teacher of the author's class can moderate this event",
-  lateMessage: 'Too late to moderate: an event must be decided 3 days before it starts',
+  lateMessage: 'Too late to moderate: teacher moderation ends 5 days before the event starts',
 };
 
 const ADMIN_MODERATION: ModerationStage = {
   from: EventStatuses.ON_ADMIN_MODERATION,
   mayModerate: (actor) => actor.role === UserRoles.ADMIN,
   forbiddenMessage: 'Only an admin can moderate this event',
-  lateMessage: 'Too late to moderate: an event must be decided 3 days before it starts',
+  lateMessage: 'Too late to moderate: the admin decides by 3 days before the event starts',
 };
 
 @Injectable()
@@ -117,6 +118,7 @@ export class EventsService {
           description: dto.description,
           category: dto.category,
           voteThreshold: dto.voteThreshold,
+          maxParticipants: dto.maxParticipants,
           initiatorId: actor.id,
           createdByRole: actor.role,
           ...flow,
@@ -144,6 +146,9 @@ export class EventsService {
     const startsAt = new Date(dto.startsAt);
     if (startsAt.getTime() <= Date.now()) {
       throw new BadRequestException('startsAt must be in the future');
+    }
+    if (dto.maxParticipants !== undefined && dto.maxParticipants < dto.voteThreshold) {
+      throw new BadRequestException('maxParticipants must be at least voteThreshold');
     }
     if (actor.role === UserRoles.ADMIN) {
       if (dto.scope !== undefined && dto.scope !== Scopes.SCHOOL) {
@@ -311,12 +316,16 @@ export class EventsService {
       }
       throw error;
     }
-    if (result.status === EventStatuses.ON_ADMIN_MODERATION) {
+    this.notifyMovedOn(id, result.status, award);
+    return result;
+  }
+
+  private notifyMovedOn(id: string, status: EventStatuses, award: FinalizedExpAward | null): void {
+    if (status === EventStatuses.ON_ADMIN_MODERATION) {
       this.notifier.awaitsAdmin(id);
     } else if (award) {
       this.notifier.finalizedByVotes(id, award.participantIds);
     }
-    return result;
   }
 
   async unvote(actor: User, id: string): Promise<EventVoteResponseDto> {
@@ -341,6 +350,7 @@ export class EventsService {
         eventId: id,
         votesCount,
         voteThreshold: locked.voteThreshold,
+        maxParticipants: locked.maxParticipants,
         status: EventStatuses.ON_VOTE,
       };
     });
@@ -484,16 +494,52 @@ export class EventsService {
     }
   }
 
+  /**
+   * Closes the voting of ON_VOTE events whose voting deadline (5 days before the date)
+   * has come: with at least voteThreshold votes the event moves on (admin moderation,
+   * or FINALIZED for an admin event), otherwise it is EXPIRED. Returns how many closed.
+   */
+  async closeVoting(now: Date = new Date()): Promise<number> {
+    const due = await this.prisma.event.findMany({ where: votingClosed(now), select: { id: true } });
+    let closed = 0;
+    for (const { id } of due) {
+      try {
+        const outcome = await this.prisma.$transaction(async (tx) => {
+          const [locked] = await tx.$queryRaw<VotingLock[]>`
+            SELECT "status", "voteThreshold", "maxParticipants", "initiatorId", "createdByRole", "createdAt", "startsAt"
+            FROM "Event" WHERE "id" = ${id} FOR UPDATE`;
+          if (!locked || locked.status !== EventStatuses.ON_VOTE || !isPastDeadline(locked, now)) {
+            return null;
+          }
+          const votesCount = await tx.eventVote.count({ where: { eventId: id } });
+          if (votesCount < locked.voteThreshold) {
+            await tx.event.update({ where: { id }, data: { status: EventStatuses.EXPIRED } });
+            return { status: EventStatuses.EXPIRED, award: null };
+          }
+          return this.moveOnFromVote(tx, id, locked.createdByRole);
+        });
+        if (outcome) {
+          closed++;
+          this.notifyMovedOn(id, outcome.status, outcome.award);
+        }
+      } catch (error) {
+        this.logger.error(`Failed to close voting of event ${id}`, error instanceof Error ? error.stack : error);
+      }
+    }
+    if (closed > 0) {
+      this.logger.log(`Closed voting of ${closed} event(s)`);
+    }
+    return closed;
+  }
+
+  /** Expires events still on teacher or admin moderation past their deadline. */
   async expireOverdue(now: Date = new Date()): Promise<number> {
     const { count } = await this.prisma.event.updateMany({
-      where: {
-        status: { in: [...PENDING_STATUSES] },
-        ...pastDeadline(now),
-      },
+      where: moderationPastDeadline(now),
       data: { status: EventStatuses.EXPIRED },
     });
     if (count > 0) {
-      this.logger.log(`Expired ${count} event(s) that were not decided before their deadline`);
+      this.logger.log(`Expired ${count} event(s) that were not moderated before their deadline`);
     }
     return count;
   }
@@ -625,7 +671,7 @@ export class EventsService {
       throw new ConflictException(`Event is not on vote, its status is ${event.status}`);
     }
     if (isPastDeadline(event)) {
-      throw new ConflictException('Voting is closed: it closes 3 days before the event starts');
+      throw new ConflictException('Voting is closed: it closes 5 days before the event starts');
     }
   }
 
@@ -634,7 +680,7 @@ export class EventsService {
     eventId: string,
   ): Promise<VotingLock> {
     const [locked] = await tx.$queryRaw<VotingLock[]>`
-      SELECT "status", "voteThreshold", "initiatorId", "createdByRole", "createdAt", "startsAt"
+      SELECT "status", "voteThreshold", "maxParticipants", "initiatorId", "createdByRole", "createdAt", "startsAt"
       FROM "Event" WHERE "id" = ${eventId} FOR UPDATE`;
     if (!locked) {
       throw new NotFoundException('Event not found');
@@ -653,19 +699,35 @@ export class EventsService {
     await tx.eventVote.create({ data: { eventId, voterId } });
     const votesCount = await tx.eventVote.count({ where: { eventId } });
 
+    // Voting stays open past voteThreshold: only the vote that fills the event closes it.
     let status: EventStatuses = EventStatuses.ON_VOTE;
     let award: FinalizedExpAward | null = null;
-    if (votesCount >= locked.voteThreshold) {
-      status =
-        locked.createdByRole === UserRoles.ADMIN
-          ? EventStatuses.FINALIZED
-          : EventStatuses.ON_ADMIN_MODERATION;
-      await tx.event.update({ where: { id: eventId }, data: { status } });
-      if (status === EventStatuses.FINALIZED) {
-        award = await awardFinalizedExp(tx, eventId);
-      }
+    if (locked.maxParticipants !== null && votesCount >= locked.maxParticipants) {
+      ({ status, award } = await this.moveOnFromVote(tx, eventId, locked.createdByRole));
     }
-    return { result: { eventId, votesCount, voteThreshold: locked.voteThreshold, status }, award };
+    return {
+      result: {
+        eventId,
+        votesCount,
+        voteThreshold: locked.voteThreshold,
+        maxParticipants: locked.maxParticipants,
+        status,
+      },
+      award,
+    };
+  }
+
+  /** Voting closed with enough votes: to admin moderation, or FINALIZED (with exp) for an admin event. */
+  private async moveOnFromVote(
+    tx: Prisma.TransactionClient,
+    eventId: string,
+    createdByRole: UserRoles,
+  ): Promise<{ status: EventStatuses; award: FinalizedExpAward | null }> {
+    const status =
+      createdByRole === UserRoles.ADMIN ? EventStatuses.FINALIZED : EventStatuses.ON_ADMIN_MODERATION;
+    await tx.event.update({ where: { id: eventId }, data: { status } });
+    const award = status === EventStatuses.FINALIZED ? await awardFinalizedExp(tx, eventId) : null;
+    return { status, award };
   }
 
   private isInScope(voterClass: string | null, eventClass: string | null, scope: Scopes): boolean {
