@@ -55,7 +55,14 @@ function saturday(weeks: number, hhmm: string): Date {
 
 // ---------- users ----------
 
-const ADMINS = [];
+const ADMINS = [
+  {
+    id: '00000000-0000-4000-8000-00000000a002',
+    schoolsById: 'seed-admin-2',
+    name: 'Дмитрий',
+    surname: 'Жуков',
+  },
+];
 
 /** teacher: null = the class has no teacher yet. */
 const CLASSES: Record<
@@ -64,7 +71,61 @@ const CLASSES: Record<
     teacher: readonly [string, string] | null;
     pupils: readonly (readonly [string, string])[];
   }
-> = {};
+> = {
+  '8B': {
+    teacher: ['Татьяна', 'Лукашевич'],
+    pupils: [
+      ['Максим', 'Шевчук'],
+      ['Полина', 'Мельник'],
+      ['Егор', 'Кравец'],
+      ['Ева', 'Бондарь'],
+      ['Артём', 'Савицкий'],
+      ['Злата', 'Гончар'],
+    ],
+  },
+  '9A': {
+    teacher: null,
+    pupils: [
+      ['Роман', 'Карпович'],
+      ['Алина', 'Дубовская'],
+      ['Илья', 'Сокол'],
+      ['Милана', 'Жданович'],
+    ],
+  },
+  '10A': {
+    teacher: ['Елена', 'Новик'],
+    pupils: [
+      ['Иван', 'Козлов'],
+      ['Анна', 'Ткачук'],
+      ['Никита', 'Лешко'],
+      ['София', 'Макаревич'],
+      ['Кирилл', 'Пашкевич'],
+      ['Дарья', 'Климович'],
+    ],
+  },
+  '10B': {
+    teacher: ['Андрей', 'Сидоренко'],
+    pupils: [
+      ['Матвей', 'Ермаков'],
+      ['Алиса', 'Головач'],
+      ['Даниил', 'Шульга'],
+      ['Вероника', 'Зайко'],
+      ['Тимофей', 'Ракович'],
+      ['Ксения', 'Борисевич'],
+    ],
+  },
+  '11A': {
+    teacher: ['Наталья', 'Гриценко'],
+    pupils: [
+      ['Александр', 'Войтович'],
+      ['Виктория', 'Семенчук'],
+      ['Михаил', 'Протасеня'],
+      ['Мария', 'Курило'],
+      ['Глеб', 'Адамович'],
+      ['Ульяна', 'Ясинская'],
+    ],
+  },
+};
 
 type ClassName = keyof typeof CLASSES;
 const CLASS_NAMES = Object.keys(CLASSES);
@@ -530,7 +591,203 @@ const PAST: SeedEvent[] = [
 ];
 
 /** Upcoming events in every pending status. Pending ones must be created less than a month (30 days) ago. */
-const UPCOMING: SeedEvent[] = [];
+const UPCOMING: SeedEvent[] = [
+  // teacher queues
+  {
+    name: 'Субботник у школьного стадиона',
+    description: 'Сбор у входа в школу, перчатки выдадут',
+    category: ENVIRONMENTAL,
+    scope: SCHOOL,
+    status: ON_MODERATION,
+    cls: '10A',
+    by: 2,
+    week: 1,
+    time: '09:00',
+    voteThreshold: 8,
+  },
+  {
+    name: 'Турнир по стритболу',
+    category: SPORTS,
+    scope: GRADE,
+    status: ON_MODERATION,
+    cls: '10B',
+    by: 4,
+    week: 2,
+    time: '18:00',
+    voteThreshold: 6,
+  },
+  {
+    name: 'Поход в кино на премьеру',
+    category: CULTURAL,
+    scope: CLASS,
+    status: ON_MODERATION,
+    cls: '8B',
+    by: 1,
+    week: 1,
+    time: '16:00',
+    voteThreshold: 4,
+  },
+  {
+    name: 'Литературная гостиная',
+    category: CREATIVE,
+    scope: CLASS,
+    status: ON_MODERATION,
+    cls: '11A',
+    by: 3,
+    week: 3,
+    time: '13:00',
+    voteThreshold: 4,
+  },
+
+  // class without a teacher: waits until a teacher registers into 9A
+  {
+    name: 'Шахматный турнир 9А',
+    description: 'Ждёт, пока в класс зарегистрируется учитель',
+    category: INTELLECTUAL,
+    scope: CLASS,
+    status: ON_MODERATION,
+    cls: '9A',
+    by: 1,
+    week: 1,
+    time: '12:00',
+    voteThreshold: 3,
+  },
+  {
+    name: 'Поход на каток',
+    category: SPORTS,
+    scope: GRADE,
+    status: ON_MODERATION,
+    cls: '9A',
+    by: 2,
+    week: 2,
+    time: '15:00',
+    voteThreshold: 3,
+  },
+
+  // voting feed
+  {
+    name: 'Утренний турнир по футболу',
+    description: 'Команды по 6 человек',
+    category: SPORTS,
+    scope: SCHOOL,
+    status: ON_VOTE,
+    cls: '10A',
+    by: 4,
+    week: 1,
+    time: '10:00',
+    voteThreshold: 12,
+    votes: 7,
+  },
+  {
+    name: 'Квиз по истории Беларуси',
+    category: INTELLECTUAL,
+    scope: GRADE,
+    status: ON_VOTE,
+    cls: '10B',
+    by: 2,
+    week: 2,
+    time: '12:00',
+    voteThreshold: 8,
+    votes: 3,
+  },
+  {
+    name: 'Новогодняя дискотека',
+    category: ENTERTAINMENT,
+    scope: SCHOOL,
+    status: ON_VOTE,
+    cls: '11A',
+    by: 1,
+    week: 3,
+    time: '19:00',
+    voteThreshold: 15,
+    votes: 10,
+  },
+  {
+    name: 'Экскурсия в Мирский замок',
+    category: TOURISM,
+    scope: CLASS,
+    status: ON_VOTE,
+    cls: '8B',
+    by: 5,
+    week: 2,
+    time: '08:00',
+    voteThreshold: 5,
+    votes: 1,
+  },
+  {
+    name: 'Мастер-класс по фотографии',
+    category: EDUCATIONAL,
+    scope: CLASS,
+    status: ON_VOTE,
+    cls: '10A',
+    by: 5,
+    week: 1,
+    time: '11:00',
+    voteThreshold: 4,
+    votes: 0,
+  },
+
+  // admin queue
+  {
+    name: 'Благотворительная ярмарка',
+    category: VOLUNTEER,
+    scope: SCHOOL,
+    status: ON_ADMIN_MODERATION,
+    cls: '10B',
+    by: 5,
+    week: 1,
+    time: '11:00',
+    voteThreshold: 10,
+  },
+  {
+    name: 'Посадка аллеи выпускников',
+    category: ENVIRONMENTAL,
+    scope: GRADE,
+    status: ON_ADMIN_MODERATION,
+    cls: '11A',
+    by: 6,
+    week: 2,
+    time: '09:00',
+    voteThreshold: 5,
+  },
+
+  // decided, not started yet
+  {
+    name: 'Зимний лыжный забег',
+    category: SPORTS,
+    scope: SCHOOL,
+    status: FINALIZED,
+    cls: '11A',
+    by: 2,
+    week: 4,
+    time: '10:00',
+    voteThreshold: 10,
+  },
+  {
+    name: 'Ночь в музее',
+    category: CULTURAL,
+    scope: GRADE,
+    status: DECLINED_BY_ADMIN,
+    cls: '10A',
+    by: 6,
+    week: 3,
+    time: '20:00',
+    voteThreshold: 6,
+    declineReason: 'Музей не работает ночью',
+  },
+  {
+    name: 'Пейнтбол',
+    category: ENTERTAINMENT,
+    scope: CLASS,
+    status: DECLINED,
+    cls: '10B',
+    by: 1,
+    week: 2,
+    time: '15:00',
+    voteThreshold: 4,
+    declineReason: 'Требуется согласие родителей, оформите заявку заново',
+  },
+];
 
 const PASSED = new Set<EventStatuses>([
   ON_ADMIN_MODERATION,
