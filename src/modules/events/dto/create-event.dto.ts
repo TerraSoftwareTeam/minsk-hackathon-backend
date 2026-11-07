@@ -64,7 +64,8 @@ export class CreateEventDto {
     minimum: 1,
     maximum: 10000,
     description:
-      'Votes needed during ON_VOTE: they send a pupil or teacher event to admin moderation, and make an admin event FINALIZED',
+      'Votes needed during ON_VOTE: they send a pupil or teacher event to admin moderation, and make an admin event FINALIZED. ' +
+      "A pupil's own vote is cast on creation (the organizer is a participant) and counts, so a pupil event needs at least 2",
   })
   @IsInt()
   @Min(1)

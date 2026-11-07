@@ -53,6 +53,12 @@ export const LIKABLE_STATUSES = [
   EventStatuses.DECLINED_BY_ADMIN,
 ] as const;
 
+/**
+ * The pupil organizer's own vote is cast on creation, so the event needs at least
+ * one more participant: with a threshold of 1 it would reach it before the vote opens.
+ */
+export const MIN_PUPIL_VOTE_THRESHOLD = 2;
+
 const WITH_USERS = {
   initiator: true,
   image: { select: { url: true } },
@@ -64,6 +70,8 @@ const withVoteState = (userId: string) =>
     ...WITH_USERS,
     likes: { where: { userId }, select: { userId: true } },
   }) as const;
+
+type VotingLock = { status: EventStatuses; voteThreshold: number; initiatorId: string } & DeadlineFields;
 
 type ModerationStage = {
   from: PendingStatus;
@@ -108,6 +116,9 @@ export class EventsService {
           initiatorId: actor.id,
           createdByRole: actor.role,
           ...flow,
+          // The pupil organizer takes part in their event from the start: one of its
+          // voters, like any other participant.
+          ...(actor.role === UserRoles.PUPIL && { votes: { create: { voterId: actor.id } } }),
         },
         include: WITH_USERS,
       }),
@@ -136,6 +147,11 @@ export class EventsService {
       return { status: EventStatuses.ON_VOTE, scope: Scopes.SCHOOL, startsAt };
     }
 
+    if (actor.role === UserRoles.PUPIL && dto.voteThreshold < MIN_PUPIL_VOTE_THRESHOLD) {
+      throw new BadRequestException(
+        `voteThreshold must be at least ${MIN_PUPIL_VOTE_THRESHOLD}: the organizer is already a participant`,
+      );
+    }
     if (dto.startsAt !== undefined) {
       throw new BadRequestException(
         'Only an admin sets the date on creation; the date of this event is set by the admin who approves it',
@@ -277,11 +293,15 @@ export class EventsService {
         createdByRole: true,
         createdAt: true,
         startsAt: true,
+        initiatorId: true,
         initiator: { select: { class: true } },
       },
     });
     if (!event) {
       throw new NotFoundException('Event not found');
+    }
+    if (event.initiatorId === actor.id) {
+      throw new ConflictException('You are the organizer: you take part in this event since you created it');
     }
     if (!this.isInScope(actor.class, event.initiator.class, event.scope)) {
       throw new ForbiddenException(`This ${event.scope} event is not for your class`);
@@ -313,6 +333,9 @@ export class EventsService {
     return this.prisma.$transaction(async (tx) => {
       const locked = await this.lockForVoting(tx, id);
       this.assertVotingOpen(locked);
+      if (locked.initiatorId === actor.id) {
+        throw new ConflictException('The organizer cannot leave their own event; delete it instead');
+      }
 
       const { count } = await tx.eventVote.deleteMany({
         where: { eventId: id, voterId: actor.id },
@@ -620,9 +643,9 @@ export class EventsService {
   private async lockForVoting(
     tx: Prisma.TransactionClient,
     eventId: string,
-  ): Promise<{ status: EventStatuses; voteThreshold: number } & DeadlineFields> {
-    const [locked] = await tx.$queryRaw<({ status: EventStatuses; voteThreshold: number } & DeadlineFields)[]>`
-      SELECT "status", "voteThreshold", "createdByRole", "createdAt", "startsAt"
+  ): Promise<VotingLock> {
+    const [locked] = await tx.$queryRaw<VotingLock[]>`
+      SELECT "status", "voteThreshold", "initiatorId", "createdByRole", "createdAt", "startsAt"
       FROM "Event" WHERE "id" = ${eventId} FOR UPDATE`;
     if (!locked) {
       throw new NotFoundException('Event not found');

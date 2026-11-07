@@ -724,7 +724,7 @@ const UPCOMING: SeedEvent[] = [
     week: 1,
     time: '11:00',
     voteThreshold: 4,
-    votes: 0,
+    votes: 1, // only the organizer so far
   },
 
   // admin queue
@@ -794,11 +794,13 @@ const PASSED = new Set<EventStatuses>([
   FINALIZED,
   DECLINED_BY_ADMIN,
 ]);
+/** Never reached the vote: only the organizer's own vote. */
 const NOT_VOTED = new Set<EventStatuses>([ON_MODERATION, DECLINED]);
 
+/** The pupil organizer votes on creation (src/modules/events/events.service.ts), so at least 1. */
 function votesFor(event: SeedEvent): number {
-  if (NOT_VOTED.has(event.status)) return 0;
-  return event.votes ?? (PASSED.has(event.status) ? event.voteThreshold : 0);
+  if (NOT_VOTED.has(event.status)) return 1;
+  return Math.max(1, event.votes ?? (PASSED.has(event.status) ? event.voteThreshold : 0));
 }
 
 /** As LIKABLE_STATUSES in src/modules/events/events.service.ts. */

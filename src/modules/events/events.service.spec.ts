@@ -202,10 +202,32 @@ describe('EventsService', () => {
         status: EventStatuses.ON_MODERATION,
         initiatorId: pupil.id,
         createdByRole: UserRoles.PUPIL,
+        votes: { create: { voterId: pupil.id } },
       });
       expect(result.initiator).toEqual(asEventUser(pupil));
       expect(result.moderators).toEqual([asEventUser(teacher), asEventUser(coTeacher)]);
       expect(notifier.awaitsTeachers).toHaveBeenCalledWith(storedEvent());
+    });
+
+    it('the pupil organizer is listed among the voters like any participant', async () => {
+      prisma.event.create.mockResolvedValue(storedEvent({ votes: [{ voter: pupil }] }));
+
+      const result = await service.create(pupil, { name: 'Trip', voteThreshold: 10, category: EventCategories.SPORTS });
+
+      expect(result.voters).toEqual([asEventUser(pupil)]);
+      expect(result.votesCount).toBe(1);
+    });
+
+    it('BadRequest, nothing created, for a pupil event with voteThreshold 1', async () => {
+      await expect(
+        service.create(pupil, { name: 'Trip', voteThreshold: 1, category: EventCategories.SPORTS }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.event.create).not.toHaveBeenCalled();
+    });
+
+    it('a teacher is not a participant of their event, voteThreshold 1 is fine', async () => {
+      await service.create(teacher, { name: 'Trip', voteThreshold: 1, category: EventCategories.SPORTS });
+      expect(prisma.event.create.mock.calls[0][0].data).not.toHaveProperty('votes');
     });
 
     describe('school event of a teacher', () => {
@@ -934,6 +956,21 @@ describe('EventsService', () => {
   });
 
   describe('vote', () => {
+    it('Conflict, no transaction, when the organizer votes for their own event', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        status: EventStatuses.ON_VOTE,
+        scope: Scopes.CLASS,
+        createdByRole: UserRoles.PUPIL,
+        createdAt: RECENT,
+        startsAt: null,
+        initiatorId: pupil.id,
+        initiator: { class: '10A' },
+      });
+
+      await expect(service.vote(pupil, 'event-1')).rejects.toThrow(/organizer/);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
     beforeEach(() => {
       prisma.event.findUnique.mockResolvedValue(voteTarget(Scopes.SCHOOL));
     });
@@ -1482,6 +1519,15 @@ describe('EventsService', () => {
   });
 
   describe('unvote', () => {
+    it('Conflict, no vote removed, when the organizer tries to leave their event', async () => {
+      tx.$queryRaw.mockResolvedValue([
+        { status: EventStatuses.ON_VOTE, voteThreshold: 10, initiatorId: pupil.id, createdAt: RECENT },
+      ]);
+
+      await expect(service.unvote(pupil, 'event-1')).rejects.toBeInstanceOf(ConflictException);
+      expect(tx.eventVote.deleteMany).not.toHaveBeenCalled();
+    });
+
     it('pupil takes the vote back and gets the new count', async () => {
       tx.eventVote.count.mockResolvedValue(4);
 
