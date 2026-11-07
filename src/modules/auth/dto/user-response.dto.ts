@@ -34,4 +34,12 @@ export class UserResponseDto {
     description: 'User role',
   })
   role!: UserRoles;
+
+  @ApiProperty({
+    example: 120,
+    minimum: 0,
+    description:
+      "Pupil's personal progress: experience points (like in Minecraft). Starts at 0",
+  })
+  exp!: number;
 }

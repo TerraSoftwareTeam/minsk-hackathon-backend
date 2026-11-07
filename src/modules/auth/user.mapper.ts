@@ -10,5 +10,6 @@ export function toUserResponse(user: User): UserResponseDto {
     surname: user.surname,
     class: user.class,
     role: user.role,
+    exp: user.exp,
   };
 }

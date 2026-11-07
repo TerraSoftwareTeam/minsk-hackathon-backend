@@ -19,6 +19,7 @@ const admin: User = {
   surname: 'Admin',
   class: null,
   role: UserRoles.ADMIN,
+  exp: 0,
 };
 
 const teacher: User = {
@@ -28,6 +29,7 @@ const teacher: User = {
   surname: 'Sidorova',
   class: '10A',
   role: UserRoles.TEACHER,
+  exp: 0,
 };
 
 const pupil: User = {
@@ -37,6 +39,7 @@ const pupil: User = {
   surname: 'Ivanov',
   class: '10A',
   role: UserRoles.PUPIL,
+  exp: 0,
 };
 
 const pupilOtherClass: User = {
@@ -123,6 +126,23 @@ describe('UsersService', () => {
         ForbiddenException,
       );
       expect(prisma.user.delete).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['pupil -> self', pupil],
+      ['teacher -> pupil of own class', teacher],
+      ['admin -> pupil', admin],
+    ])('returns the exp of the user (%s)', async (_name, actor) => {
+      prisma.user.findUnique.mockResolvedValueOnce({ ...pupil, exp: 120 });
+      await expect(service.findOne(actor, pupil.id)).resolves.toEqual({
+        id: pupil.id,
+        schoolsById: pupil.schoolsById,
+        name: pupil.name,
+        surname: pupil.surname,
+        class: pupil.class,
+        role: UserRoles.PUPIL,
+        exp: 120,
+      });
     });
 
     it('returns 404 for a missing user', async () => {

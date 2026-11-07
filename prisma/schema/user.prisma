@@ -5,6 +5,8 @@ model User {
   surname     String
   class       String?
   role        UserRoles @default(PUPIL)
+  /// Pupil's personal progress (experience points, like in Minecraft); never negative.
+  exp         Int       @default(0)
 
   initiatedEvents Event[]       @relation("EventInitiator")
   eventVotes      EventVote[]

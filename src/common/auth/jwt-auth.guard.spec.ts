@@ -15,6 +15,7 @@ const user = (over: Partial<User>): User => ({
   surname: 'S',
   class: '10A',
   role: UserRoles.PUPIL,
+  exp: 0,
   ...over,
 });
 

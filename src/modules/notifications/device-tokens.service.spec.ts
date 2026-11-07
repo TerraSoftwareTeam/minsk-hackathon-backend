@@ -9,6 +9,7 @@ const teacher: User = {
   surname: 'S',
   class: '10A',
   role: UserRoles.TEACHER,
+  exp: 0,
 };
 
 describe('DeviceTokensService', () => {
