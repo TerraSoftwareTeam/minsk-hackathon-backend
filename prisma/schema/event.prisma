@@ -11,12 +11,22 @@ model Event {
   /// Votes needed to move the event from ON_VOTE to ON_ADMIN_MODERATION. Always >= 1.
   voteThreshold Int
 
-  /// When the event takes place. Set only by the admin who approves the event
-  /// (FINALIZED); null before that and in every other status. Never changed after.
+  /// When the event takes place. Never changed once set.
+  /// Pupil and teacher events: set by the admin who approves the event (FINALIZED),
+  /// null in every other status.
+  /// Admin (school) events: set by the admin on creation, in every status; it is
+  /// also their deadline: not FINALIZED by then -> EXPIRED.
   startsAt DateTime?
 
   initiator   User   @relation("EventInitiator", fields: [initiatorId], references: [id])
   initiatorId String
+
+  /// Role of the initiator when the event was created; it picks the flow:
+  /// PUPIL: ON_MODERATION (teachers) -> ON_VOTE -> ON_ADMIN_MODERATION -> FINALIZED.
+  /// TEACHER: starts ON_VOTE (no teacher moderation) -> ON_ADMIN_MODERATION -> FINALIZED.
+  /// ADMIN: a SCHOOL event with a date, no moderation: ON_VOTE -> FINALIZED when the
+  /// votes reach voteThreshold, EXPIRED at startsAt otherwise.
+  createdByRole UserRoles @default(PUPIL)
 
   // No moderator column: the moderators are derived from the status. ON_MODERATION:
   // every TEACHER of the initiator's class; ON_ADMIN_MODERATION: every ADMIN.
@@ -28,10 +38,12 @@ model Event {
   image   Image?  @relation("EventImage", fields: [imageId], references: [id], onDelete: SetNull)
   imageId String? @unique
 
-  /// Pending deadlines are derived from it: createdAt + 1 month (event-deadlines.ts).
+  /// Pending deadlines of pupil and teacher events are derived from it:
+  /// createdAt + 1 month (event-deadlines.ts). Admin events expire at startsAt.
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([initiatorId])
   @@index([status, createdAt])
+  @@index([status, startsAt])
 }

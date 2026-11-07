@@ -23,11 +23,13 @@ import { EventVoteResponseDto } from './dto/event-vote-response.dto';
 import { VotingEventResponseDto } from './dto/voting-event-response.dto';
 import { AdminApproveEventDto } from './dto/admin-approve-event.dto';
 import {
+  DeadlineFields,
   PENDING_STATUSES,
   PendingStatus,
-  deadlineCutoff,
+  beforeDeadline,
   isPastDeadline,
   isPending,
+  pastDeadline,
 } from './event-deadlines';
 import {
   OUTCOME_STATUS,
@@ -94,28 +96,56 @@ export class EventsService {
   ) {}
 
   async create(actor: User, dto: CreateEventDto): Promise<EventResponseDto> {
-    if (actor.role !== UserRoles.PUPIL) {
-      throw new ForbiddenException('Only a pupil can create an event');
-    }
-    if (!actor.class) {
-      throw new BadRequestException('Pupil has no class assigned');
-    }
+    const flow = this.creationFlow(actor, dto);
     const event = await this.withPrismaErrors(() =>
       this.prisma.event.create({
         data: {
           name: dto.name,
           description: dto.description,
-          scope: dto.scope,
           category: dto.category,
           voteThreshold: dto.voteThreshold,
-          status: EventStatuses.ON_MODERATION,
           initiatorId: actor.id,
+          createdByRole: actor.role,
+          ...flow,
         },
         include: WITH_USERS,
       }),
     );
-    this.notifier.awaitsTeachers(event);
+    if (event.status === EventStatuses.ON_MODERATION) {
+      this.notifier.awaitsTeachers(event);
+    }
     return this.toResponse(event);
+  }
+
+  private creationFlow(
+    actor: User,
+    dto: CreateEventDto,
+  ): { status: EventStatuses; scope?: Scopes; startsAt?: Date } {
+    if (actor.role === UserRoles.ADMIN) {
+      if (dto.scope !== undefined && dto.scope !== Scopes.SCHOOL) {
+        throw new BadRequestException('An admin event is a school event: its scope can only be SCHOOL');
+      }
+      if (!dto.startsAt) {
+        throw new BadRequestException('An admin sets the date of a school event on creation: startsAt is required');
+      }
+      const startsAt = new Date(dto.startsAt);
+      if (startsAt.getTime() <= Date.now()) {
+        throw new BadRequestException('startsAt must be in the future');
+      }
+      return { status: EventStatuses.ON_VOTE, scope: Scopes.SCHOOL, startsAt };
+    }
+
+    if (dto.startsAt !== undefined) {
+      throw new BadRequestException(
+        'Only an admin sets the date on creation; the date of this event is set by the admin who approves it',
+      );
+    }
+    if (!actor.class) {
+      throw new BadRequestException(`${actor.role === UserRoles.TEACHER ? 'Teacher' : 'Pupil'} has no class assigned`);
+    }
+    const status =
+      actor.role === UserRoles.TEACHER ? EventStatuses.ON_VOTE : EventStatuses.ON_MODERATION;
+    return { status, scope: dto.scope };
   }
 
   async previewProbability(category: EventCategories, startsAt: Date | null): Promise<number> {
@@ -134,7 +164,7 @@ export class EventsService {
       where: {
         initiator: { class: actor.class },
         status: EventStatuses.ON_MODERATION,
-        createdAt: { gt: deadlineCutoff() },
+        ...beforeDeadline(),
       },
       include: WITH_USERS,
       orderBy: { createdAt: 'asc' },
@@ -143,11 +173,6 @@ export class EventsService {
   }
 
   async findMine(actor: User): Promise<VotingEventResponseDto[]> {
-    if (actor.role !== UserRoles.PUPIL) {
-      throw new ForbiddenException(
-        'Only a pupil can create events, so only a pupil has own events',
-      );
-    }
     const events = await this.prisma.event.findMany({
       where: { initiatorId: actor.id },
       include: withVoteState(actor.id),
@@ -165,11 +190,15 @@ export class EventsService {
     const events = await this.prisma.event.findMany({
       where: {
         status: EventStatuses.ON_VOTE,
-        createdAt: { gt: deadlineCutoff() },
-        OR: [
-          { scope: Scopes.SCHOOL },
-          { scope: Scopes.GRADE },
-          { scope: Scopes.CLASS, initiator: { class: actor.class } },
+        AND: [
+          beforeDeadline(),
+          {
+            OR: [
+              { scope: Scopes.SCHOOL },
+              { scope: Scopes.GRADE },
+              { scope: Scopes.CLASS, initiator: { class: actor.class } },
+            ],
+          },
         ],
       },
       include: withVoteState(actor.id),
@@ -188,7 +217,7 @@ export class EventsService {
     const events = await this.prisma.event.findMany({
       where: {
         status: EventStatuses.ON_ADMIN_MODERATION,
-        createdAt: { gt: deadlineCutoff() },
+        ...beforeDeadline(),
       },
       include: WITH_USERS,
       orderBy: { createdAt: 'asc' },
@@ -244,7 +273,9 @@ export class EventsService {
       select: {
         status: true,
         scope: true,
+        createdByRole: true,
         createdAt: true,
+        startsAt: true,
         initiator: { select: { class: true } },
       },
     });
@@ -387,7 +418,7 @@ export class EventsService {
     const { count } = await this.prisma.event.updateMany({
       where: {
         status: { in: [...PENDING_STATUSES] },
-        createdAt: { lte: deadlineCutoff(now) },
+        ...pastDeadline(now),
       },
       data: { status: EventStatuses.EXPIRED },
     });
@@ -487,8 +518,8 @@ export class EventsService {
     });
   }
 
-  private assertImageEditable(event: { status: EventStatuses; createdAt: Date }): void {
-    if (!isPending(event.status) || isPastDeadline(event.createdAt)) {
+  private assertImageEditable(event: { status: EventStatuses } & DeadlineFields): void {
+    if (!isPending(event.status) || isPastDeadline(event)) {
       throw new ConflictException(
         `The image can be changed only until the event is decided, its status is ${event.status}`,
       );
@@ -498,10 +529,10 @@ export class EventsService {
   private async lockForImage(
     tx: Prisma.TransactionClient,
     id: string,
-  ): Promise<{ status: EventStatuses; createdAt: Date; imageId: string | null }> {
-    const [locked] = await tx.$queryRaw<
-      { status: EventStatuses; createdAt: Date; imageId: string | null }[]
-    >`SELECT "status", "createdAt", "imageId" FROM "Event" WHERE "id" = ${id} FOR UPDATE`;
+  ): Promise<{ status: EventStatuses; imageId: string | null } & DeadlineFields> {
+    const [locked] = await tx.$queryRaw<({ status: EventStatuses; imageId: string | null } & DeadlineFields)[]>`
+      SELECT "status", "createdByRole", "createdAt", "startsAt", "imageId"
+      FROM "Event" WHERE "id" = ${id} FOR UPDATE`;
     if (!locked) {
       throw new NotFoundException('Event not found');
     }
@@ -519,23 +550,26 @@ export class EventsService {
     }
   }
 
-  private assertVotingOpen(event: { status: EventStatuses; createdAt: Date }): void {
+  private assertVotingOpen(event: { status: EventStatuses } & DeadlineFields): void {
     if (event.status !== EventStatuses.ON_VOTE) {
       throw new ConflictException(`Event is not on vote, its status is ${event.status}`);
     }
-    if (isPastDeadline(event.createdAt)) {
-      throw new ConflictException('Voting is closed: it closes a month after the event was created');
+    if (isPastDeadline(event)) {
+      throw new ConflictException(
+        event.createdByRole === UserRoles.ADMIN
+          ? 'Voting is closed: it closes when the event starts'
+          : 'Voting is closed: it closes a month after the event was created',
+      );
     }
   }
 
   private async lockForVoting(
     tx: Prisma.TransactionClient,
     eventId: string,
-  ): Promise<{ status: EventStatuses; voteThreshold: number; createdAt: Date }> {
-    const [locked] = await tx.$queryRaw<
-      { status: EventStatuses; voteThreshold: number; createdAt: Date }[]
-    >`
-      SELECT "status", "voteThreshold", "createdAt" FROM "Event" WHERE "id" = ${eventId} FOR UPDATE`;
+  ): Promise<{ status: EventStatuses; voteThreshold: number } & DeadlineFields> {
+    const [locked] = await tx.$queryRaw<({ status: EventStatuses; voteThreshold: number } & DeadlineFields)[]>`
+      SELECT "status", "voteThreshold", "createdByRole", "createdAt", "startsAt"
+      FROM "Event" WHERE "id" = ${eventId} FOR UPDATE`;
     if (!locked) {
       throw new NotFoundException('Event not found');
     }
@@ -555,7 +589,10 @@ export class EventsService {
 
     let status: EventStatuses = EventStatuses.ON_VOTE;
     if (votesCount >= locked.voteThreshold) {
-      status = EventStatuses.ON_ADMIN_MODERATION;
+      status =
+        locked.createdByRole === UserRoles.ADMIN
+          ? EventStatuses.FINALIZED
+          : EventStatuses.ON_ADMIN_MODERATION;
       await tx.event.update({ where: { id: eventId }, data: { status } });
     }
     return { eventId, votesCount, voteThreshold: locked.voteThreshold, status };
@@ -595,12 +632,12 @@ export class EventsService {
     if (event.status !== stage.from) {
       throw new ConflictException(`Event is already ${event.status}`);
     }
-    if (isPastDeadline(event.createdAt)) {
+    if (isPastDeadline(event)) {
       throw new ConflictException(stage.lateMessage);
     }
 
     const { count } = await this.prisma.event.updateMany({
-      where: { id, status: stage.from, createdAt: { gt: deadlineCutoff() } },
+      where: { id, status: stage.from, ...beforeDeadline() },
       data,
     });
     if (count === 0) {

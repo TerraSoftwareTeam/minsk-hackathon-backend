@@ -61,19 +61,25 @@ export class EventsController {
 
   @Post()
   @ApiOperation({
-    summary: 'Create an event request',
+    summary: 'Create an event',
     description:
-      "Pupil only. The event gets status ON_MODERATION and is moderated by every teacher of the pupil's class (they all get a push). " +
-      'It has no date: an admin sets startsAt on approval. votingClosesAt (createdAt + 1 month) is computed: ' +
-      'teacher moderation, voting and the admin decision must finish by then.',
+      "Any role; the role picks the flow (createdByRole in the response).\n\n" +
+      "PUPIL: status ON_MODERATION, moderated by every teacher of the pupil's class (they all get a push). " +
+      'No date: an admin sets startsAt on approval. votingClosesAt = createdAt + 1 month: ' +
+      'teacher moderation, voting and the admin decision must finish by then.\n\n' +
+      'TEACHER (school event): no teacher moderation, status ON_VOTE at once; scope relative to the teacher\'s class. ' +
+      'On voteThreshold votes -> ON_ADMIN_MODERATION, then the admin approves with a date or declines. ' +
+      'Same deadline: createdAt + 1 month.\n\n' +
+      'ADMIN (school event): no moderation, scope SCHOOL, startsAt required (in the future). Status ON_VOTE; ' +
+      'on voteThreshold votes -> FINALIZED, otherwise EXPIRED at startsAt (votingClosesAt = startsAt).',
   })
   @ApiBody({ type: CreateEventDto })
   @ApiCreatedResponse({ type: EventResponseDto })
   @ApiBadRequestResponse({
     description:
-      "Validation failed (incl. an unknown field such as startsAt)",
+      'Validation failed (incl. an unknown field); startsAt sent by a pupil or teacher; ' +
+      'admin: startsAt missing or not in the future, or scope other than SCHOOL; pupil or teacher without a class',
   })
-  @ApiForbiddenResponse({ description: 'Caller is not a pupil' })
   @ApiConflictResponse({ description: 'Event with this name already exists' })
   create(
     @CurrentUser() actor: User,
@@ -122,10 +128,9 @@ export class EventsController {
   @ApiOperation({
     summary: "Author's own events",
     description:
-      'Pupil only. All events created by the caller, in any status, newest first, with the vote count.',
+      'Any role. All events created by the caller, in any status, newest first, with the vote count.',
   })
   @ApiOkResponse({ type: [VotingEventResponseDto] })
-  @ApiForbiddenResponse({ description: 'Caller is not a pupil' })
   findMine(@CurrentUser() actor: User): Promise<VotingEventResponseDto[]> {
     return this.eventsService.findMine(actor);
   }
@@ -341,7 +346,7 @@ export class EventsController {
   @ApiOperation({
     summary: 'Vote for an event',
     description:
-      "Pupil only. The event must be ON_VOTE and voting must be open (until a month after the event was created). One vote per pupil per event. Audience by scope, relative to the initiator's class: CLASS - same class, GRADE - same grade (first number of the class name), SCHOOL - any pupil. The vote that reaches voteThreshold moves the event to ON_ADMIN_MODERATION.",
+      "Pupil only. The event must be ON_VOTE and voting must be open (until votingClosesAt: a month after the event was created, or startsAt of an admin event). One vote per pupil per event. Audience by scope, relative to the initiator's class: CLASS - same class, GRADE - same grade (first number of the class name), SCHOOL - any pupil. The vote that reaches voteThreshold moves the event to ON_ADMIN_MODERATION, or an admin event to FINALIZED.",
   })
   @ApiUuidParam()
   @ApiOkResponse({ type: EventVoteResponseDto })
@@ -351,7 +356,7 @@ export class EventsController {
   @ApiNotFoundResponse({ description: 'Event not found' })
   @ApiConflictResponse({
     description:
-      'Event is not on vote, voting has closed (a month after creation), or the pupil has already voted',
+      'Event is not on vote, voting has closed (votingClosesAt has passed), or the pupil has already voted',
   })
   vote(
     @CurrentUser() actor: User,
@@ -365,7 +370,7 @@ export class EventsController {
     summary: 'Take the vote back (unsubscribe from the event)',
     description:
       'Pupil only, and only the pupil who voted. The event must still be ON_VOTE and voting must be open ' +
-      '(until a month after the event was created): once the threshold has moved the event to ON_ADMIN_MODERATION, ' +
+      '(until votingClosesAt): once the threshold has moved the event on (ON_ADMIN_MODERATION or FINALIZED), ' +
       'its votes stay. The pupil can vote again afterwards.',
   })
   @ApiUuidParam()

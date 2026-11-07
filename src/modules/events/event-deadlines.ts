@@ -1,4 +1,4 @@
-import { EventStatuses } from '../../../prisma/generated/prisma/client';
+import { EventStatuses, Prisma, UserRoles } from '../../../prisma/generated/prisma/client';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -16,14 +16,41 @@ export function isPending(status: EventStatuses): status is PendingStatus {
   return (PENDING_STATUSES as readonly EventStatuses[]).includes(status);
 }
 
-export function decisionDeadline(createdAt: Date): Date {
-  return new Date(createdAt.getTime() + DECISION_WINDOW_MS);
+export type DeadlineFields = {
+  createdByRole: UserRoles;
+  createdAt: Date;
+  startsAt: Date | null;
+};
+
+export function decisionDeadline(event: DeadlineFields): Date {
+  if (event.createdByRole === UserRoles.ADMIN && event.startsAt) {
+    return event.startsAt;
+  }
+  return new Date(event.createdAt.getTime() + DECISION_WINDOW_MS);
 }
 
 export function deadlineCutoff(now: Date = new Date()): Date {
   return new Date(now.getTime() - DECISION_WINDOW_MS);
 }
 
-export function isPastDeadline(createdAt: Date, now: Date = new Date()): boolean {
-  return createdAt.getTime() <= deadlineCutoff(now).getTime();
+export function isPastDeadline(event: DeadlineFields, now: Date = new Date()): boolean {
+  return decisionDeadline(event).getTime() <= now.getTime();
+}
+
+export function beforeDeadline(now: Date = new Date()): Prisma.EventWhereInput {
+  return {
+    OR: [
+      { createdByRole: { not: UserRoles.ADMIN }, createdAt: { gt: deadlineCutoff(now) } },
+      { createdByRole: UserRoles.ADMIN, startsAt: { gt: now } },
+    ],
+  };
+}
+
+export function pastDeadline(now: Date = new Date()): Prisma.EventWhereInput {
+  return {
+    OR: [
+      { createdByRole: { not: UserRoles.ADMIN }, createdAt: { lte: deadlineCutoff(now) } },
+      { createdByRole: UserRoles.ADMIN, startsAt: { lte: now } },
+    ],
+  };
 }

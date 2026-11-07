@@ -45,6 +45,13 @@ const PAST = new Date(Date.now() - 60 * 1000);
 const RECENT = new Date(Date.now() - DAY_MS);
 const OVERDUE = new Date(Date.now() - 31 * DAY_MS);
 
+const BEFORE_DEADLINE = {
+  OR: [
+    { createdByRole: { not: UserRoles.ADMIN }, createdAt: { gt: expect.any(Date) } },
+    { createdByRole: UserRoles.ADMIN, startsAt: { gt: expect.any(Date) } },
+  ],
+};
+
 const WITH_USERS_INCLUDE = {
   initiator: true,
   image: { select: { url: true } },
@@ -67,6 +74,7 @@ const storedEvent = (over: Partial<EventWithUsers> = {}): EventWithUsers => ({
   voteThreshold: 10,
   startsAt: null,
   initiatorId: pupil.id,
+  createdByRole: UserRoles.PUPIL,
   initiator: pupil,
   createdAt: RECENT,
   updatedAt: RECENT,
@@ -162,19 +170,153 @@ describe('EventsService', () => {
         voteThreshold: 10,
         status: EventStatuses.ON_MODERATION,
         initiatorId: pupil.id,
+        createdByRole: UserRoles.PUPIL,
       });
       expect(result.initiator).toEqual(asEventUser(pupil));
       expect(result.moderators).toEqual([asEventUser(teacher), asEventUser(coTeacher)]);
       expect(notifier.awaitsTeachers).toHaveBeenCalledWith(storedEvent());
     });
 
-    it.each([
-      ['teacher', teacher],
-      ['admin', admin],
-    ])('%s cannot create an event', async (_name, actor) => {
-      await expect(service.create(actor, { name: 'Trip', voteThreshold: 10, category: EventCategories.SPORTS })).rejects.toBeInstanceOf(
-        ForbiddenException,
-      );
+    describe('school event of a teacher', () => {
+      beforeEach(() => {
+        prisma.event.create.mockResolvedValue(
+          storedEvent({
+            status: EventStatuses.ON_VOTE,
+            initiatorId: teacher.id,
+            initiator: teacher,
+            createdByRole: UserRoles.TEACHER,
+          }),
+        );
+      });
+
+      it('skips the teacher moderation: ON_VOTE at once, scope chosen by the teacher', async () => {
+        const result = await service.create(teacher, {
+          name: 'Trip',
+          scope: Scopes.GRADE,
+          voteThreshold: 10,
+          category: EventCategories.SPORTS,
+        });
+
+        expect(prisma.event.create.mock.calls[0][0].data).toEqual({
+          name: 'Trip',
+          description: undefined,
+          scope: Scopes.GRADE,
+          category: EventCategories.SPORTS,
+          voteThreshold: 10,
+          status: EventStatuses.ON_VOTE,
+          initiatorId: teacher.id,
+          createdByRole: UserRoles.TEACHER,
+        });
+        expect(result.status).toBe(EventStatuses.ON_VOTE);
+        expect(result.createdByRole).toBe(UserRoles.TEACHER);
+        expect(result.moderators).toEqual([]);
+        expect(result.startsAt).toBeNull();
+        expect(result.votingClosesAt.getTime()).toBe(RECENT.getTime() + 30 * DAY_MS);
+        expect(notifier.awaitsTeachers).not.toHaveBeenCalled();
+      });
+
+      it('BadRequest, nothing created, when the teacher sends a date', async () => {
+        await expect(
+          service.create(teacher, {
+            name: 'Trip',
+            voteThreshold: 10,
+            category: EventCategories.SPORTS,
+            startsAt: FUTURE.toISOString(),
+          }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(prisma.event.create).not.toHaveBeenCalled();
+      });
+
+      it('BadRequest when the teacher has no class', async () => {
+        await expect(
+          service.create(
+            { ...teacher, class: null },
+            { name: 'Trip', voteThreshold: 10, category: EventCategories.SPORTS },
+          ),
+        ).rejects.toBeInstanceOf(BadRequestException);
+      });
+    });
+
+    describe('school event of an admin', () => {
+      const adminEvent = (over: Partial<EventWithUsers> = {}) =>
+        storedEvent({
+          scope: Scopes.SCHOOL,
+          status: EventStatuses.ON_VOTE,
+          startsAt: FUTURE,
+          initiatorId: admin.id,
+          initiator: admin,
+          createdByRole: UserRoles.ADMIN,
+          ...over,
+        });
+
+      beforeEach(() => {
+        prisma.event.create.mockResolvedValue(adminEvent());
+      });
+
+      it('no moderation: SCHOOL, ON_VOTE, with the date; voting closes at the date', async () => {
+        const result = await service.create(admin, {
+          name: 'Trip',
+          voteThreshold: 10,
+          category: EventCategories.SPORTS,
+          startsAt: FUTURE.toISOString(),
+        });
+
+        expect(prisma.event.create.mock.calls[0][0].data).toEqual({
+          name: 'Trip',
+          description: undefined,
+          scope: Scopes.SCHOOL,
+          category: EventCategories.SPORTS,
+          voteThreshold: 10,
+          status: EventStatuses.ON_VOTE,
+          startsAt: FUTURE,
+          initiatorId: admin.id,
+          createdByRole: UserRoles.ADMIN,
+        });
+        expect(result.startsAt).toEqual(FUTURE);
+        expect(result.votingClosesAt).toEqual(FUTURE);
+        expect(result.moderators).toEqual([]);
+        expect(notifier.awaitsTeachers).not.toHaveBeenCalled();
+      });
+
+      it('an explicit SCHOOL scope is accepted', async () => {
+        await service.create(admin, {
+          name: 'Trip',
+          scope: Scopes.SCHOOL,
+          voteThreshold: 10,
+          category: EventCategories.SPORTS,
+          startsAt: FUTURE.toISOString(),
+        });
+        expect(prisma.event.create.mock.calls[0][0].data.scope).toBe(Scopes.SCHOOL);
+      });
+
+      it.each([
+        ['without a date', { startsAt: undefined }],
+        ['with a past date', { startsAt: PAST.toISOString() }],
+        ['with a CLASS scope', { scope: Scopes.CLASS }],
+        ['with a GRADE scope', { scope: Scopes.GRADE }],
+      ])('BadRequest, nothing created, %s', async (_name, over) => {
+        await expect(
+          service.create(admin, {
+            name: 'Trip',
+            voteThreshold: 10,
+            category: EventCategories.SPORTS,
+            startsAt: FUTURE.toISOString(),
+            ...over,
+          }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(prisma.event.create).not.toHaveBeenCalled();
+      });
+    });
+
+    it('BadRequest, nothing created, when a pupil sends a date', async () => {
+      await expect(
+        service.create(pupil, {
+          name: 'Trip',
+          voteThreshold: 10,
+          category: EventCategories.SPORTS,
+          startsAt: FUTURE.toISOString(),
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
       expect(prisma.event.create).not.toHaveBeenCalled();
     });
 
@@ -223,7 +365,7 @@ describe('EventsService', () => {
         where: {
           initiator: { class: '10A' },
           status: EventStatuses.ON_MODERATION,
-          createdAt: { gt: expect.any(Date) },
+          ...BEFORE_DEADLINE,
         },
         include: WITH_USERS_INCLUDE,
         orderBy: { createdAt: 'asc' },
@@ -318,7 +460,7 @@ describe('EventsService', () => {
         where: {
           id: 'event-1',
           status: EventStatuses.ON_MODERATION,
-          createdAt: { gt: expect.any(Date) },
+          ...BEFORE_DEADLINE,
         },
         data: { status: EventStatuses.ON_VOTE },
       });
@@ -446,9 +588,12 @@ describe('EventsService', () => {
     it.each([
       ['teacher', teacher],
       ['admin', admin],
-    ])('%s has no own events list', async (_name, actor) => {
-      await expect(service.findMine(actor)).rejects.toBeInstanceOf(ForbiddenException);
-      expect(prisma.event.findMany).not.toHaveBeenCalled();
+    ])('%s has an own events list too: staff create school events', async (_name, actor) => {
+      prisma.event.findMany.mockResolvedValue([]);
+      await expect(service.findMine(actor)).resolves.toEqual([]);
+      expect(prisma.event.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { initiatorId: actor.id } }),
+      );
     });
   });
 
@@ -477,11 +622,15 @@ describe('EventsService', () => {
       expect(prisma.event.findMany).toHaveBeenCalledWith({
         where: {
           status: EventStatuses.ON_VOTE,
-          createdAt: { gt: expect.any(Date) },
-          OR: [
-            { scope: Scopes.SCHOOL },
-            { scope: Scopes.GRADE },
-            { scope: Scopes.CLASS, initiator: { class: '10A' } },
+          AND: [
+            BEFORE_DEADLINE,
+            {
+              OR: [
+                { scope: Scopes.SCHOOL },
+                { scope: Scopes.GRADE },
+                { scope: Scopes.CLASS, initiator: { class: '10A' } },
+              ],
+            },
           ],
         },
         include: {
@@ -546,7 +695,7 @@ describe('EventsService', () => {
       await service.findForAdminModeration(admin);
 
       expect(prisma.event.findMany).toHaveBeenCalledWith({
-        where: { status: EventStatuses.ON_ADMIN_MODERATION, createdAt: { gt: expect.any(Date) } },
+        where: { status: EventStatuses.ON_ADMIN_MODERATION, ...BEFORE_DEADLINE },
         include: WITH_USERS_INCLUDE,
         orderBy: { createdAt: 'asc' },
       });
@@ -574,7 +723,7 @@ describe('EventsService', () => {
         where: {
           id: 'event-1',
           status: EventStatuses.ON_ADMIN_MODERATION,
-          createdAt: { gt: expect.any(Date) },
+          ...BEFORE_DEADLINE,
         },
         data: { status: EventStatuses.FINALIZED, startsAt: FUTURE },
       });
@@ -672,8 +821,65 @@ describe('EventsService', () => {
     const voteTarget = (scope: Scopes, initiatorClass: string | null = '10A') => ({
       status: EventStatuses.ON_VOTE,
       scope,
+      createdByRole: UserRoles.PUPIL,
       createdAt: RECENT,
+      startsAt: null,
       initiator: { class: initiatorClass },
+    });
+
+    describe('school event of an admin', () => {
+      const adminTarget = (startsAt: Date) => ({
+        status: EventStatuses.ON_VOTE,
+        scope: Scopes.SCHOOL,
+        createdByRole: UserRoles.ADMIN,
+        createdAt: OVERDUE,
+        startsAt,
+        initiator: { class: null },
+      });
+      const lockedAdminEvent = (startsAt: Date, voteThreshold = 10) => [
+        { status: EventStatuses.ON_VOTE, voteThreshold, createdByRole: UserRoles.ADMIN, createdAt: OVERDUE, startsAt },
+      ];
+
+      it('voting stays open until the date, even more than a month after the creation', async () => {
+        prisma.event.findUnique.mockResolvedValue(adminTarget(FUTURE));
+        tx.$queryRaw.mockResolvedValue(lockedAdminEvent(FUTURE));
+        tx.eventVote.count.mockResolvedValue(3);
+
+        await expect(service.vote(pupil, 'event-1')).resolves.toMatchObject({
+          status: EventStatuses.ON_VOTE,
+          votesCount: 3,
+        });
+      });
+
+      it('the vote that reaches the threshold finalizes it: no admin moderation', async () => {
+        prisma.event.findUnique.mockResolvedValue(adminTarget(FUTURE));
+        tx.$queryRaw.mockResolvedValue(lockedAdminEvent(FUTURE));
+        tx.eventVote.count.mockResolvedValue(10);
+
+        const result = await service.vote(pupil, 'event-1');
+
+        expect(tx.event.update).toHaveBeenCalledWith({
+          where: { id: 'event-1' },
+          data: { status: EventStatuses.FINALIZED },
+        });
+        expect(result.status).toBe(EventStatuses.FINALIZED);
+        expect(notifier.awaitsAdmin).not.toHaveBeenCalled();
+      });
+
+      it('Conflict, no vote stored, once the date has come', async () => {
+        prisma.event.findUnique.mockResolvedValue(adminTarget(PAST));
+
+        await expect(service.vote(pupil, 'event-1')).rejects.toBeInstanceOf(ConflictException);
+        expect(prisma.$transaction).not.toHaveBeenCalled();
+      });
+
+      it('Conflict, no vote stored, when the date came after the pre-check', async () => {
+        prisma.event.findUnique.mockResolvedValue(adminTarget(FUTURE));
+        tx.$queryRaw.mockResolvedValue(lockedAdminEvent(PAST));
+
+        await expect(service.vote(pupil, 'event-1')).rejects.toBeInstanceOf(ConflictException);
+        expect(tx.eventVote.create).not.toHaveBeenCalled();
+      });
     });
 
     it.each([
@@ -809,7 +1015,7 @@ describe('EventsService', () => {
   });
 
   describe('expireOverdue', () => {
-    it('expires every pending status a month (30 days) after the creation', async () => {
+    it('expires every pending status a month (30 days) after the creation, an admin event at its date', async () => {
       prisma.event.updateMany.mockResolvedValue({ count: 2 });
       const now = new Date('2026-12-01T10:00:00Z');
       const cutoff = new Date('2026-11-01T10:00:00Z');
@@ -824,7 +1030,10 @@ describe('EventsService', () => {
               EventStatuses.ON_ADMIN_MODERATION,
             ],
           },
-          createdAt: { lte: cutoff },
+          OR: [
+            { createdByRole: { not: UserRoles.ADMIN }, createdAt: { lte: cutoff } },
+            { createdByRole: UserRoles.ADMIN, startsAt: { lte: now } },
+          ],
         },
         data: { status: EventStatuses.EXPIRED },
       });

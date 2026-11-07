@@ -3,6 +3,7 @@ import {
   EventCategories,
   EventStatuses,
   Scopes,
+  UserRoles,
 } from '../../../../prisma/generated/prisma/client';
 import { EventUserResponseDto } from './event-user-response.dto';
 
@@ -35,10 +36,21 @@ export class EventResponseDto {
     enum: EventStatuses,
     example: EventStatuses.ON_MODERATION,
     description:
-      'ON_MODERATION (teacher) -> ON_VOTE (pupils) -> ON_ADMIN_MODERATION (admin) -> FINALIZED. ' +
-      'DECLINED / DECLINED_BY_ADMIN: rejected by the teacher / admin. EXPIRED: not decided before its deadline',
+      'Pupil event: ON_MODERATION (teacher) -> ON_VOTE (pupils) -> ON_ADMIN_MODERATION (admin) -> FINALIZED. ' +
+      'Teacher event: starts ON_VOTE, then the same (never ON_MODERATION or DECLINED). ' +
+      'Admin event: ON_VOTE -> FINALIZED when the votes reach voteThreshold, otherwise EXPIRED at startsAt. ' +
+      'DECLINED / DECLINED_BY_ADMIN: rejected by the teacher / admin. EXPIRED: not decided before its deadline (votingClosesAt)',
   })
   status!: EventStatuses;
+
+  @ApiProperty({
+    enum: UserRoles,
+    example: UserRoles.PUPIL,
+    description:
+      'Role of the initiator when the event was created, it picks the flow (see status). ' +
+      'TEACHER and ADMIN events are school events created by the staff',
+  })
+  createdByRole!: UserRoles;
 
   @ApiProperty({ example: null, nullable: true, type: String, description: 'Set when declined (by the teacher or an admin) with a reason' })
   declineReason!: string | null;
@@ -46,7 +58,8 @@ export class EventResponseDto {
   @ApiProperty({
     type: 'integer',
     example: 15,
-    description: 'Votes needed to move from ON_VOTE to ON_ADMIN_MODERATION',
+    description:
+      'Votes needed to leave ON_VOTE: to ON_ADMIN_MODERATION (pupil and teacher events), to FINALIZED (admin events)',
   })
   voteThreshold!: number;
 
@@ -55,14 +68,16 @@ export class EventResponseDto {
     nullable: true,
     type: Date,
     description:
-      'When the event starts (UTC). Set by the admin on approval: null in every status except FINALIZED',
+      'When the event starts (UTC). Pupil and teacher events: set by the admin on approval, null in every status except FINALIZED. ' +
+      'Admin events: set on creation, present in every status',
   })
   startsAt!: Date | null;
 
   @ApiProperty({
     example: '2026-12-06T10:00:00.000Z',
     description:
-      'Computed: createdAt + 1 month (30 days). Teacher moderation, voting and the admin decision must finish by then, otherwise the event becomes EXPIRED',
+      'Computed. Pupil and teacher events: createdAt + 1 month (30 days), teacher moderation, voting and the admin decision must finish by then. ' +
+      'Admin events: startsAt, the votes must reach voteThreshold by then. Otherwise the event becomes EXPIRED',
   })
   votingClosesAt!: Date;
 
@@ -92,14 +107,14 @@ export class EventResponseDto {
   })
   likesCount!: number;
 
-  @ApiProperty({ type: EventUserResponseDto, description: 'Pupil who created the event' })
+  @ApiProperty({ type: EventUserResponseDto, description: 'Who created the event: a pupil, a teacher or an admin (see createdByRole)' })
   initiator!: EventUserResponseDto;
 
   @ApiProperty({
     type: [EventUserResponseDto],
     description:
       "Who may decide on the event now. ON_MODERATION: every teacher of the author's class (empty while the class has none: " +
-      'a teacher who registers into it moderates the event at once). ON_ADMIN_MODERATION: every admin. Empty in every other status',
+      'a teacher who registers into it moderates the event at once). ON_ADMIN_MODERATION: every admin. Empty in every other status (admin events are never moderated)',
   })
   moderators!: EventUserResponseDto[];
 
