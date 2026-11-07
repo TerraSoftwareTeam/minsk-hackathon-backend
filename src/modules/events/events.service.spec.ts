@@ -45,13 +45,19 @@ const FUTURE = new Date(Date.now() + 7 * DAY_MS);
 const PAST = new Date(Date.now() - 60 * 1000);
 const RECENT = new Date(Date.now() - DAY_MS);
 const OVERDUE = new Date(Date.now() - 31 * DAY_MS);
+/** A pupil event this soon is past its voting deadline (3 days before the date). */
+const SOON = new Date(Date.now() + 2 * DAY_MS);
 
 const BEFORE_DEADLINE = {
   OR: [
-    { createdByRole: { not: UserRoles.ADMIN }, createdAt: { gt: expect.any(Date) } },
+    { createdByRole: UserRoles.PUPIL, status: { not: EventStatuses.ON_VOTE } },
+    { createdByRole: UserRoles.PUPIL, status: EventStatuses.ON_VOTE, startsAt: { gt: expect.any(Date) } },
+    { createdByRole: UserRoles.TEACHER, createdAt: { gt: expect.any(Date) } },
     { createdByRole: UserRoles.ADMIN, startsAt: { gt: expect.any(Date) } },
   ],
 };
+
+const PUPIL_DATE = FUTURE.toISOString();
 
 const WITH_USERS_INCLUDE = {
   initiator: true,
@@ -73,7 +79,7 @@ const storedEvent = (over: Partial<EventWithUsers> = {}): EventWithUsers => ({
   status: EventStatuses.ON_MODERATION,
   declineReason: null,
   voteThreshold: 10,
-  startsAt: null,
+  startsAt: FUTURE,
   initiatorId: pupil.id,
   createdByRole: UserRoles.PUPIL,
   initiator: pupil,
@@ -191,7 +197,13 @@ describe('EventsService', () => {
 
   describe('create', () => {
     it('pupil creates an ON_MODERATION event moderated by every teacher of their class', async () => {
-      const result = await service.create(pupil, { name: 'Trip', scope: Scopes.GRADE, voteThreshold: 10, category: EventCategories.SPORTS });
+      const result = await service.create(pupil, {
+        name: 'Trip',
+        scope: Scopes.GRADE,
+        voteThreshold: 10,
+        category: EventCategories.SPORTS,
+        startsAt: PUPIL_DATE,
+      });
 
       expect(prisma.event.create.mock.calls[0][0].data).toEqual({
         name: 'Trip',
@@ -200,6 +212,7 @@ describe('EventsService', () => {
         category: EventCategories.SPORTS,
         voteThreshold: 10,
         status: EventStatuses.ON_MODERATION,
+        startsAt: FUTURE,
         initiatorId: pupil.id,
         createdByRole: UserRoles.PUPIL,
         votes: { create: { voterId: pupil.id } },
@@ -212,7 +225,7 @@ describe('EventsService', () => {
     it('the pupil organizer is listed among the voters like any participant', async () => {
       prisma.event.create.mockResolvedValue(storedEvent({ votes: [{ voter: pupil }] }));
 
-      const result = await service.create(pupil, { name: 'Trip', voteThreshold: 10, category: EventCategories.SPORTS });
+      const result = await service.create(pupil, { name: 'Trip', voteThreshold: 10, category: EventCategories.SPORTS, startsAt: PUPIL_DATE });
 
       expect(result.voters).toEqual([asEventUser(pupil)]);
       expect(result.votesCount).toBe(1);
@@ -220,7 +233,7 @@ describe('EventsService', () => {
 
     it('BadRequest, nothing created, for a pupil event with voteThreshold 1', async () => {
       await expect(
-        service.create(pupil, { name: 'Trip', voteThreshold: 1, category: EventCategories.SPORTS }),
+        service.create(pupil, { name: 'Trip', voteThreshold: 1, category: EventCategories.SPORTS, startsAt: PUPIL_DATE }),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(prisma.event.create).not.toHaveBeenCalled();
     });
@@ -238,6 +251,7 @@ describe('EventsService', () => {
             initiatorId: teacher.id,
             initiator: teacher,
             createdByRole: UserRoles.TEACHER,
+            startsAt: null,
           }),
         );
       });
@@ -361,13 +375,16 @@ describe('EventsService', () => {
       });
     });
 
-    it('BadRequest, nothing created, when a pupil sends a date', async () => {
+    it.each([
+      ['without a date', { startsAt: undefined }],
+      ['with a past date', { startsAt: PAST.toISOString() }],
+    ])('BadRequest, nothing created, for a pupil event %s', async (_, over) => {
       await expect(
         service.create(pupil, {
           name: 'Trip',
           voteThreshold: 10,
           category: EventCategories.SPORTS,
-          startsAt: FUTURE.toISOString(),
+          ...over,
         }),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(prisma.event.create).not.toHaveBeenCalled();
@@ -382,19 +399,20 @@ describe('EventsService', () => {
 
     it('BadRequest when the pupil has no class', async () => {
       await expect(
-        service.create({ ...pupil, class: null }, { name: 'Trip', voteThreshold: 10, category: EventCategories.SPORTS }),
+        service.create({ ...pupil, class: null }, { name: 'Trip', voteThreshold: 10, category: EventCategories.SPORTS, startsAt: PUPIL_DATE }),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
-    it('the event has no date and votingClosesAt = createdAt + 30 days', async () => {
+    it('the pupil chooses the date; voting closes 3 days before it', async () => {
       const result = await service.create(pupil, {
         name: 'Trip',
         voteThreshold: 10,
         category: EventCategories.SPORTS,
+        startsAt: PUPIL_DATE,
       });
-      expect(prisma.event.create.mock.calls[0][0].data).not.toHaveProperty('startsAt');
-      expect(result.startsAt).toBeNull();
-      expect(result.votingClosesAt.getTime()).toBe(RECENT.getTime() + 30 * DAY_MS);
+      expect(prisma.event.create.mock.calls[0][0].data.startsAt).toEqual(FUTURE);
+      expect(result.startsAt).toEqual(FUTURE);
+      expect(result.votingClosesAt.getTime()).toBe(FUTURE.getTime() - 3 * DAY_MS);
     });
 
     it('Conflict on a duplicate name', async () => {
@@ -404,7 +422,7 @@ describe('EventsService', () => {
           clientVersion: 'test',
         }),
       );
-      await expect(service.create(pupil, { name: 'Trip', voteThreshold: 10, category: EventCategories.SPORTS })).rejects.toBeInstanceOf(
+      await expect(service.create(pupil, { name: 'Trip', voteThreshold: 10, category: EventCategories.SPORTS, startsAt: PUPIL_DATE })).rejects.toBeInstanceOf(
         ConflictException,
       );
     });
@@ -574,13 +592,11 @@ describe('EventsService', () => {
       expect(prisma.event.updateMany).not.toHaveBeenCalled();
     });
 
-    it('Conflict, nothing changed, when a month has passed since the creation', async () => {
-      prisma.event.findUnique.mockResolvedValue(storedEvent({ createdAt: OVERDUE }));
-      await expect(service.approve(teacher, 'event-1')).rejects.toBeInstanceOf(ConflictException);
-      await expect(service.decline(teacher, 'event-1', {})).rejects.toBeInstanceOf(
-        ConflictException,
-      );
-      expect(prisma.event.updateMany).not.toHaveBeenCalled();
+    it('no deadline: still moderated a month after the creation, and after its date', async () => {
+      prisma.event.findUnique.mockResolvedValue(storedEvent({ createdAt: OVERDUE, startsAt: PAST }));
+      await service.approve(teacher, 'event-1');
+      await service.decline(teacher, 'event-1', {});
+      expect(prisma.event.updateMany).toHaveBeenCalledTimes(2);
     });
 
     it('Conflict when a concurrent request moderated it first', async () => {
@@ -765,12 +781,22 @@ describe('EventsService', () => {
       );
     });
 
-    const approval = { startsAt: FUTURE.toISOString() };
+    const approval = {};
+    const teacherApproval = { startsAt: FUTURE.toISOString() };
+    const teacherEventOnAdminModeration = (over: Partial<EventWithUsers> = {}) =>
+      storedEvent({
+        status: EventStatuses.ON_ADMIN_MODERATION,
+        initiatorId: teacher.id,
+        initiator: teacher,
+        createdByRole: UserRoles.TEACHER,
+        startsAt: null,
+        ...over,
+      });
 
-    it('admin approves and sets the date: ON_ADMIN_MODERATION -> FINALIZED', async () => {
+    it("admin approves a pupil event, its date stays the pupil's: ON_ADMIN_MODERATION -> FINALIZED", async () => {
       prisma.event.findUnique
         .mockResolvedValueOnce(onAdminModeration())
-        .mockResolvedValueOnce(storedEvent({ status: EventStatuses.FINALIZED, startsAt: FUTURE }));
+        .mockResolvedValueOnce(storedEvent({ status: EventStatuses.FINALIZED }));
 
       const result = await service.adminApprove(admin, 'event-1', approval);
 
@@ -780,7 +806,7 @@ describe('EventsService', () => {
           status: EventStatuses.ON_ADMIN_MODERATION,
           ...BEFORE_DEADLINE,
         },
-        data: { status: EventStatuses.FINALIZED, startsAt: FUTURE },
+        data: { status: EventStatuses.FINALIZED },
       });
       expect(result.status).toBe(EventStatuses.FINALIZED);
       expect(result.startsAt).toEqual(FUTURE);
@@ -813,22 +839,47 @@ describe('EventsService', () => {
       );
     });
 
-    it("FINALIZED teacher's event: no exp for the teacher, the voters still get theirs", async () => {
-      prisma.event.findUnique.mockResolvedValue(
-        storedEvent({
-          status: EventStatuses.ON_ADMIN_MODERATION,
-          initiatorId: teacher.id,
-          initiator: teacher,
-          createdByRole: UserRoles.TEACHER,
-        }),
+    it('BadRequest, nothing changed, when the admin sends a date for a pupil event', async () => {
+      await expect(service.adminApprove(admin, 'event-1', teacherApproval)).rejects.toBeInstanceOf(
+        BadRequestException,
       );
+      expect(prisma.event.updateMany).not.toHaveBeenCalled();
+      expect(notifier.decisionMade).not.toHaveBeenCalled();
+    });
+
+    it("admin approves a teacher's event and sets its date", async () => {
+      prisma.event.findUnique
+        .mockResolvedValueOnce(teacherEventOnAdminModeration())
+        .mockResolvedValueOnce(teacherEventOnAdminModeration({ status: EventStatuses.FINALIZED, startsAt: FUTURE }));
+
+      const result = await service.adminApprove(admin, 'event-1', teacherApproval);
+
+      expect(prisma.event.updateMany.mock.calls[0][0].data).toEqual({
+        status: EventStatuses.FINALIZED,
+        startsAt: FUTURE,
+      });
+      expect(result.startsAt).toEqual(FUTURE);
+    });
+
+    it.each([
+      ['without a date', {}],
+      ['with a past date', { startsAt: PAST.toISOString() }],
+    ])("BadRequest, nothing changed, for a teacher's event %s", async (_, dto) => {
+      prisma.event.findUnique.mockResolvedValue(teacherEventOnAdminModeration());
+      await expect(service.adminApprove(admin, 'event-1', dto)).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.event.updateMany).not.toHaveBeenCalled();
+      expect(notifier.decisionMade).not.toHaveBeenCalled();
+    });
+
+    it("FINALIZED teacher's event: no exp for the teacher, the voters still get theirs", async () => {
+      prisma.event.findUnique.mockResolvedValue(teacherEventOnAdminModeration());
       tx.event.findUniqueOrThrow.mockResolvedValue({
         initiatorId: teacher.id,
         initiator: { role: UserRoles.TEACHER },
         votes: [{ voterId: pupil.id }],
       });
 
-      await service.adminApprove(admin, 'event-1', approval);
+      await service.adminApprove(admin, 'event-1', teacherApproval);
 
       expect(tx.user.update).not.toHaveBeenCalled();
       expect(tx.user.updateMany.mock.calls[0][0].where).toEqual({ id: { in: [pupil.id] } });
@@ -926,11 +977,18 @@ describe('EventsService', () => {
       await expect(service.approve(admin, 'event-1')).rejects.toBeInstanceOf(ForbiddenException);
     });
 
-    it('Conflict, nothing changed, when a month has passed since the creation', async () => {
+    it('a pupil event has no deadline: still moderated a month after the creation', async () => {
       prisma.event.findUnique.mockResolvedValue(
         storedEvent({ status: EventStatuses.ON_ADMIN_MODERATION, createdAt: OVERDUE }),
       );
-      await expect(service.adminApprove(admin, 'event-1', approval)).rejects.toBeInstanceOf(
+      await service.adminApprove(admin, 'event-1', approval);
+      await service.adminDecline(admin, 'event-1', {});
+      expect(prisma.event.updateMany).toHaveBeenCalledTimes(2);
+    });
+
+    it("Conflict, nothing changed, when a month has passed since the creation of a teacher's event", async () => {
+      prisma.event.findUnique.mockResolvedValue(teacherEventOnAdminModeration({ createdAt: OVERDUE }));
+      await expect(service.adminApprove(admin, 'event-1', teacherApproval)).rejects.toBeInstanceOf(
         ConflictException,
       );
       await expect(service.adminDecline(admin, 'event-1', {})).rejects.toBeInstanceOf(
@@ -980,7 +1038,7 @@ describe('EventsService', () => {
       scope,
       createdByRole: UserRoles.PUPIL,
       createdAt: RECENT,
-      startsAt: null,
+      startsAt: FUTURE,
       initiator: { class: initiatorClass },
     });
 
@@ -1120,10 +1178,10 @@ describe('EventsService', () => {
       expect(result.status).toBe(EventStatuses.ON_ADMIN_MODERATION);
     });
 
-    it('Conflict, no vote stored, when voting has closed (a month after the creation)', async () => {
+    it('Conflict, no vote stored, when voting has closed (3 days before the date)', async () => {
       prisma.event.findUnique.mockResolvedValue({
         ...voteTarget(Scopes.SCHOOL),
-        createdAt: OVERDUE,
+        startsAt: SOON,
       });
 
       await expect(service.vote(pupil, 'event-1')).rejects.toBeInstanceOf(ConflictException);
@@ -1132,7 +1190,7 @@ describe('EventsService', () => {
 
     it('Conflict, no vote stored, when voting closed after the pre-check', async () => {
       tx.$queryRaw.mockResolvedValue([
-        { status: EventStatuses.ON_VOTE, voteThreshold: 10, createdAt: OVERDUE },
+        { status: EventStatuses.ON_VOTE, voteThreshold: 10, createdByRole: UserRoles.PUPIL, createdAt: RECENT, startsAt: SOON },
       ]);
 
       await expect(service.vote(pupil, 'event-1')).rejects.toBeInstanceOf(ConflictException);
@@ -1183,10 +1241,11 @@ describe('EventsService', () => {
   });
 
   describe('expireOverdue', () => {
-    it('expires every pending status a month (30 days) after the creation, an admin event at its date', async () => {
+    it('expires a pupil event on vote 3 days before its date, a teacher event a month after the creation, an admin event at its date', async () => {
       prisma.event.updateMany.mockResolvedValue({ count: 2 });
       const now = new Date('2026-12-01T10:00:00Z');
       const cutoff = new Date('2026-11-01T10:00:00Z');
+      const votingCutoff = new Date('2026-12-04T10:00:00Z');
 
       await expect(service.expireOverdue(now)).resolves.toBe(2);
       expect(prisma.event.updateMany).toHaveBeenCalledWith({
@@ -1199,7 +1258,8 @@ describe('EventsService', () => {
             ],
           },
           OR: [
-            { createdByRole: { not: UserRoles.ADMIN }, createdAt: { lte: cutoff } },
+            { createdByRole: UserRoles.PUPIL, status: EventStatuses.ON_VOTE, startsAt: { lte: votingCutoff } },
+            { createdByRole: UserRoles.TEACHER, createdAt: { lte: cutoff } },
             { createdByRole: UserRoles.ADMIN, startsAt: { lte: now } },
           ],
         },
@@ -1268,7 +1328,7 @@ describe('EventsService', () => {
       ['findForAdminModeration', admin, EventStatuses.ON_ADMIN_MODERATION],
     ] as const)('%s returns the probability of every listed event', async (method, actor, status) => {
       const listed = {
-        ...storedEvent({ status, scope: Scopes.SCHOOL }),
+        ...storedEvent({ status, scope: Scopes.SCHOOL, startsAt: SAT_NOON }),
         votes: [],
         likes: [],
         _count: { votes: 0 },
@@ -1352,7 +1412,7 @@ describe('EventsService', () => {
     );
 
     it('author cannot set an image past the deadline, before the scheduler expires it', async () => {
-      prisma.event.findUnique.mockResolvedValue(storedEvent({ status: EventStatuses.ON_VOTE, createdAt: OVERDUE }));
+      prisma.event.findUnique.mockResolvedValue(storedEvent({ status: EventStatuses.ON_VOTE, startsAt: SOON }));
       await expect(service.setImage(pupil, 'event-1', upload)).rejects.toBeInstanceOf(ConflictException);
     });
 
@@ -1500,7 +1560,7 @@ describe('EventsService', () => {
     });
 
     it('Conflict for the author past the deadline, nothing deleted', async () => {
-      prisma.event.findUnique.mockResolvedValue(storedEvent({ createdAt: OVERDUE }));
+      prisma.event.findUnique.mockResolvedValue(storedEvent({ status: EventStatuses.ON_VOTE, startsAt: SOON }));
       await expect(service.remove(pupil, 'event-1')).rejects.toBeInstanceOf(ConflictException);
       expect(tx.event.delete).not.toHaveBeenCalled();
     });
@@ -1570,9 +1630,9 @@ describe('EventsService', () => {
       },
     );
 
-    it('Conflict, no vote removed, when voting has closed (a month after the creation)', async () => {
+    it('Conflict, no vote removed, when voting has closed (3 days before the date)', async () => {
       tx.$queryRaw.mockResolvedValue([
-        { status: EventStatuses.ON_VOTE, voteThreshold: 10, createdAt: OVERDUE },
+        { status: EventStatuses.ON_VOTE, voteThreshold: 10, createdByRole: UserRoles.PUPIL, createdAt: RECENT, startsAt: SOON },
       ]);
 
       await expect(service.unvote(pupil, 'event-1')).rejects.toBeInstanceOf(ConflictException);

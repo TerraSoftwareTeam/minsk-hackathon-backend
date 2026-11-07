@@ -76,9 +76,11 @@ export class CreateEventDto {
     example: '2026-12-05T12:00:00+03:00',
     format: 'date-time',
     description:
-      'Admin only, and required for an admin: when the school event takes place, ISO 8601 date-time with a timezone ' +
-      '(Z or ±hh:mm), in the future. It is also the voting deadline: without enough votes by then the event becomes EXPIRED. ' +
-      'Never changed afterwards. A pupil or teacher must not send it: their date is set by the admin on approval',
+      'When the event takes place, ISO 8601 date-time with a timezone (Z or ±hh:mm), in the future. Never changed afterwards, ' +
+      'not even by the admin on moderation (who can only approve or decline). ' +
+      'Pupil: required; voting closes 3 days before it, without enough votes by then the event becomes EXPIRED. ' +
+      'Admin: required; it is also the voting deadline. ' +
+      'Teacher: must not be sent, the date is set by the admin on approval',
   })
   @IsOptional()
   @IsISO8601({ strict: true })

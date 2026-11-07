@@ -39,7 +39,7 @@ export class EventResponseDto {
       'Pupil event: ON_MODERATION (teacher) -> ON_VOTE (pupils) -> ON_ADMIN_MODERATION (admin) -> FINALIZED. ' +
       'Teacher event: starts ON_VOTE, then the same (never ON_MODERATION or DECLINED). ' +
       'Admin event: ON_VOTE -> FINALIZED when the votes reach voteThreshold, otherwise EXPIRED at startsAt. ' +
-      'DECLINED / DECLINED_BY_ADMIN: rejected by the teacher / admin. EXPIRED: not decided before its deadline (votingClosesAt)',
+      'DECLINED / DECLINED_BY_ADMIN: rejected by the teacher / admin. EXPIRED: not decided before its deadline (see votingClosesAt)',
   })
   status!: EventStatuses;
 
@@ -68,7 +68,8 @@ export class EventResponseDto {
     nullable: true,
     type: Date,
     description:
-      'When the event starts (UTC). Pupil and teacher events: set by the admin on approval, null in every status except FINALIZED. ' +
+      'When the event starts (UTC). Never changed once set. Pupil events: chosen by the pupil on creation, present in every status ' +
+      '(only old events rejected before that may have none). Teacher events: set by the admin on approval, null in every status except FINALIZED. ' +
       'Admin events: set on creation, present in every status',
   })
   startsAt!: Date | null;
@@ -76,7 +77,9 @@ export class EventResponseDto {
   @ApiProperty({
     example: '2026-12-06T10:00:00.000Z',
     description:
-      'Computed. Pupil and teacher events: createdAt + 1 month (30 days), teacher moderation, voting and the admin decision must finish by then. ' +
+      'Computed. Pupil events: startsAt - 3 days, the votes must reach voteThreshold by then (ON_VOTE), otherwise EXPIRED; ' +
+      'teacher and admin moderation have no deadline. ' +
+      'Teacher events: createdAt + 1 month (30 days), voting and the admin decision must finish by then. ' +
       'Admin events: startsAt, the votes must reach voteThreshold by then. Otherwise the event becomes EXPIRED',
   })
   votingClosesAt!: Date;
@@ -87,8 +90,8 @@ export class EventResponseDto {
     maximum: 1,
     description:
       'Computed: probability (0..1) that the event takes place, from other FINALIZED events of the same category (also not yet started ones), ' +
-      'the only ones with a date. For a FINALIZED event, weighted by how close their start time of day (Minsk time) is; ' +
-      'before the date is set, the time is not compared. 0.9 with at least 5 such events (at the same time); 0.5 without history',
+      'the only ones with a date. For an event with a date (pupil and admin events always, teacher events once FINALIZED), ' +
+      'weighted by how close their start time of day (Minsk time) is; without a date, the time is not compared. 0.9 with at least 5 such events (at the same time); 0.5 without history',
   })
   successProbability!: number;
 

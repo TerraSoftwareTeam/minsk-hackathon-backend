@@ -590,7 +590,7 @@ const PAST: SeedEvent[] = [
   },
 ];
 
-/** Upcoming events in every pending status. Pending ones must be created less than a month (30 days) ago. */
+/** Upcoming events in every pending status. Ones on vote must be more than 3 days before their date. */
 const UPCOMING: SeedEvent[] = [
   // teacher queues
   {
@@ -821,33 +821,26 @@ function likesFor(event: SeedEvent): number {
   );
 }
 
-/** A month, as in src/modules/events/event-deadlines.ts. */
-const DECISION_WINDOW_MS = 30 * DAY_MS;
+/** Pupil events: voting closes this long before the date, as in src/modules/events/event-deadlines.ts. */
+const VOTING_CLOSES_BEFORE_START_MS = 3 * DAY_MS;
 
-/**
- * Requests are filed 1-3 weeks before the planned date, never in the future.
- * Expired ones are moved past the deadline and pending ones kept before it.
- */
+/** Requests are filed 1-3 weeks before the planned date, never in the future. */
 function seedCreatedAt(event: SeedEvent, planned: Date, now: Date): Date {
-  let created = Math.min(
-    planned.getTime() - (7 + (event.by % 3) * 7) * DAY_MS,
-    now.getTime() - DAY_MS,
+  return new Date(
+    Math.min(
+      planned.getTime() - (7 + (event.by % 3) * 7) * DAY_MS,
+      now.getTime() - DAY_MS,
+    ),
   );
-  if (event.status === EXPIRED) {
-    created = Math.min(created, now.getTime() - DECISION_WINDOW_MS - DAY_MS);
-  }
-  if (
-    ([ON_MODERATION, ON_VOTE, ON_ADMIN_MODERATION] as EventStatuses[]).includes(
-      event.status,
-    )
-  ) {
-    created = Math.max(created, now.getTime() - DECISION_WINDOW_MS + DAY_MS);
-  }
-  return new Date(created);
 }
 
 /** Catches seed data that the app itself could never produce. */
-function assertConsistent(event: SeedEvent, createdAt: Date, now: Date): void {
+function assertConsistent(
+  event: SeedEvent,
+  planned: Date,
+  createdAt: Date,
+  now: Date,
+): void {
   const fail = (why: string) => {
     throw new Error(`Seed event "${event.name}": ${why}`);
   };
@@ -863,27 +856,22 @@ function assertConsistent(event: SeedEvent, createdAt: Date, now: Date): void {
   ) {
     fail('reached the threshold but did not move on');
   }
-  const pending = [
-    ON_MODERATION,
-    ON_VOTE,
-    ON_ADMIN_MODERATION,
-  ] as EventStatuses[];
-  const overdue = createdAt.getTime() <= now.getTime() - DECISION_WINDOW_MS;
+  if (createdAt.getTime() >= planned.getTime())
+    fail('created after its date: the pupil chooses a date in the future');
+  // Only voting has a deadline: teacher and admin moderation have none.
+  const votingClosed =
+    planned.getTime() - VOTING_CLOSES_BEFORE_START_MS <= now.getTime();
   const likes = likesFor(event);
   if (likes > ALL_PUPILS.length)
     fail(`${likes} likes but only ${ALL_PUPILS.length} pupils in the school`);
   if (likes > 0 && !LIKABLE.has(event.status))
     fail(`liked in status ${event.status}, before the teacher approved it`);
-  if (
-    !CLASSES[event.cls].teacher &&
-    event.status !== ON_MODERATION &&
-    event.status !== EXPIRED
-  )
+  if (!CLASSES[event.cls].teacher && event.status !== ON_MODERATION)
     fail('moved past moderation in a class that has no teacher');
-  if (pending.includes(event.status) && overdue)
-    fail('pending, but its deadline (a month after creation) has passed');
-  if (event.status === EXPIRED && !overdue)
-    fail('expired before its deadline (a month after creation)');
+  if (event.status === ON_VOTE && votingClosed)
+    fail('on vote, but voting has closed (3 days before its date)');
+  if (event.status === EXPIRED && !votingClosed)
+    fail('expired before voting closed (3 days before its date)');
 }
 
 async function main(): Promise<void> {
@@ -950,13 +938,12 @@ async function main(): Promise<void> {
       });
 
       for (const event of all) {
-        // The planned Saturday: the date the admin set for FINALIZED events;
-        // for the others only the creation time is derived from it.
+        // The planned Saturday: the date the pupil chose on creation.
         const planned = saturday(event.week, event.time);
         const id = seedId(`event:${event.name}`);
         const initiator = pupilId(event.cls, event.by);
         const createdAt = seedCreatedAt(event, planned, now);
-        assertConsistent(event, createdAt, now);
+        assertConsistent(event, planned, createdAt, now);
 
         await tx.event.create({
           data: {
@@ -968,8 +955,8 @@ async function main(): Promise<void> {
             status: event.status,
             declineReason: event.declineReason ?? null,
             voteThreshold: event.voteThreshold,
-            // Only the admin sets the date, on approval.
-            startsAt: event.status === FINALIZED ? planned : null,
+            // The pupil chooses the date on creation, it is kept in every status.
+            startsAt: planned,
             initiatorId: initiator,
             createdAt,
           },

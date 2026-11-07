@@ -11,9 +11,13 @@ model Event {
   /// Votes needed to move the event from ON_VOTE to ON_ADMIN_MODERATION. Always >= 1.
   voteThreshold Int
 
-  /// When the event takes place. Never changed once set.
-  /// Pupil and teacher events: set by the admin who approves the event (FINALIZED),
-  /// null in every other status.
+  /// When the event takes place. Never changed once set (the admin moderating a pupil
+  /// event can only approve or decline it).
+  /// Pupil events: chosen by the pupil on creation, in every status (old events rejected
+  /// before that may have none). Voting closes 3 days before it: not enough votes by
+  /// then -> EXPIRED. Teacher and admin moderation of a pupil event have no deadline.
+  /// Teacher events: set by the admin who approves the event (FINALIZED), null in every
+  /// other status.
   /// Admin (school) events: set by the admin on creation, in every status; it is
   /// also their deadline: not FINALIZED by then -> EXPIRED.
   startsAt DateTime?
@@ -38,8 +42,9 @@ model Event {
   image   Image?  @relation("EventImage", fields: [imageId], references: [id], onDelete: SetNull)
   imageId String? @unique
 
-  /// Pending deadlines of pupil and teacher events are derived from it:
-  /// createdAt + 1 month (event-deadlines.ts). Admin events expire at startsAt.
+  /// Pending deadlines of teacher events are derived from it: createdAt + 1 month
+  /// (event-deadlines.ts). Pupil events expire on vote 3 days before startsAt, admin
+  /// events at startsAt.
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
