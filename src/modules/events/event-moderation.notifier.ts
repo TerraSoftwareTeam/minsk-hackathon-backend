@@ -3,17 +3,12 @@ import { EventStatuses, UserRoles } from '../../../prisma/generated/prisma/clien
 import { PrismaService } from '../../prisma/prisma.service';
 import { PushService } from '../notifications/push.service';
 
-/** `data.type` of the push, the app uses it to open the right screen. */
 export const MODERATION_PUSH_TYPES = {
-  /** To the teacher: an event awaits their moderation. */
   TEACHER: 'EVENT_TEACHER_MODERATION',
-  /** To the admins: an event collected its votes and awaits their decision. */
   ADMIN: 'EVENT_ADMIN_MODERATION',
-  /** To the author: the teacher or an admin approved or declined their event, `data.status` says which. */
   DECISION: 'EVENT_DECISION',
 } as const;
 
-/** A moderation decision and the status it moves the event to. */
 export type DecisionStatus = 'ON_VOTE' | 'DECLINED' | 'FINALIZED' | 'DECLINED_BY_ADMIN';
 
 const DECISION_TEXTS: Record<DecisionStatus, { title: string; body: (name: string) => string }> = {
@@ -35,10 +30,6 @@ const DECISION_TEXTS: Record<DecisionStatus, { title: string; body: (name: strin
   },
 };
 
-/**
- * The reason is up to 2000 characters, FCM limits the whole message to 4 KB:
- * the push shows the beginning, the app shows the full reason in the event.
- */
 const MAX_REASON_IN_PUSH = 200;
 
 type NotifiedEvent = {
@@ -48,14 +39,6 @@ type NotifiedEvent = {
   initiator: { name: string; surname: string; class: string | null };
 };
 
-/**
- * Pushes to whoever has to moderate an event:
- * - the assigned teacher, when a pupil creates it (ON_MODERATION);
- * - every admin, when it collects its votes (ON_ADMIN_MODERATION);
- * and to its author, when the teacher or an admin approves or declines it.
- * Fire-and-forget: the methods return at once and never throw, a failed push
- * does not affect the request that triggered it.
- */
 @Injectable()
 export class EventModerationNotifier {
   private readonly logger = new Logger(EventModerationNotifier.name);
@@ -131,7 +114,6 @@ export class EventModerationNotifier {
 }
 
 function truncate(text: string, maxLength: number): string {
-  // Array.from splits by code points, so an emoji is not cut in half.
   const chars = Array.from(text.trim());
   return chars.length <= maxLength ? chars.join('') : `${chars.slice(0, maxLength - 1).join('')}…`;
 }

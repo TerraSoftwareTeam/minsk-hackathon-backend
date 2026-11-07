@@ -9,8 +9,6 @@ import { EventsScheduler } from './events.scheduler';
 import { EventsService } from './events.service';
 
 @Module({
-  // AuthModule provides JwtService for JwtAuthGuard; ImagesModule stores event images;
-  // NotificationsModule pushes to the moderators.
   imports: [PrismaModule, AuthModule, ImagesModule, NotificationsModule],
   controllers: [EventsController],
   providers: [EventsService, EventsScheduler, EventModerationNotifier],

@@ -37,9 +37,7 @@ const admin = user({ id: 'admin-1', role: UserRoles.ADMIN });
 const DAY_MS = 24 * 3600 * 1000;
 const FUTURE = new Date(Date.now() + 7 * DAY_MS);
 const PAST = new Date(Date.now() - 60 * 1000);
-/** Created recently: the month for the decision has not passed. */
 const RECENT = new Date(Date.now() - DAY_MS);
-/** Created more than a month ago: past the decision deadline. */
 const OVERDUE = new Date(Date.now() - 31 * DAY_MS);
 
 const WITH_USERS_INCLUDE = {
@@ -49,7 +47,6 @@ const WITH_USERS_INCLUDE = {
   votes: { select: { voter: true }, orderBy: { createdAt: 'asc' } },
 };
 
-/** `count` voters; the first one is `first` if given. */
 const voters = (count: number, first?: User) =>
   Array.from({ length: count }, (_, i) => ({
     voter: i === 0 && first ? first : user({ id: `voter-${i}`, schoolsById: `v${i}` }),
@@ -93,7 +90,6 @@ describe('EventsService', () => {
   };
   let images: { uploadImage: jest.Mock; deleteImage: jest.Mock };
   let notifier: { awaitsTeacher: jest.Mock; awaitsAdmin: jest.Mock; decisionMade: jest.Mock };
-  // Client used inside prisma.$transaction(fn).
   let tx: {
     $queryRaw: jest.Mock;
     eventVote: { create: jest.Mock; count: jest.Mock; deleteMany: jest.Mock };
@@ -792,7 +788,7 @@ describe('EventsService', () => {
     it('expires every pending status a month (30 days) after the creation', async () => {
       prisma.event.updateMany.mockResolvedValue({ count: 2 });
       const now = new Date('2026-12-01T10:00:00Z');
-      const cutoff = new Date('2026-11-01T10:00:00Z'); // created 30 days ago or earlier
+      const cutoff = new Date('2026-11-01T10:00:00Z');
 
       await expect(service.expireOverdue(now)).resolves.toBe(2);
       expect(prisma.event.updateMany).toHaveBeenCalledWith({
@@ -897,7 +893,6 @@ describe('EventsService', () => {
 
   describe('event image', () => {
     const upload = { originalname: 'a.jpg', mimetype: 'image/jpeg', size: 10, buffer: Buffer.from([0xff, 0xd8, 0xff]) } as Express.Multer.File;
-    /** Row as seen under the lock inside the transaction. */
     const lockedRow = (over: Partial<{ status: EventStatuses; createdAt: Date; imageId: string | null }> = {}) => [
       { status: EventStatuses.ON_MODERATION, createdAt: RECENT, imageId: null, ...over },
     ];

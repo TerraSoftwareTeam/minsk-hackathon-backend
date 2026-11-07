@@ -8,13 +8,11 @@ export class EventsScheduler {
 
   constructor(private readonly eventsService: EventsService) {}
 
-  /** A pending event can keep its status past its start for at most about a minute. */
   @Cron(CronExpression.EVERY_MINUTE)
   async expireOverdue(): Promise<void> {
     try {
       await this.eventsService.expireOverdue();
     } catch (error) {
-      // A failed run is retried on the next tick; never crash the scheduler.
       this.logger.error('Failed to expire overdue events', error instanceof Error ? error.stack : error);
     }
   }

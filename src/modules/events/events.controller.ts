@@ -82,7 +82,6 @@ export class EventsController {
     return this.eventsService.create(actor, dto);
   }
 
-  // Declared before ':id' so "probability", "my", "voting", "moderation" and "admin-moderation" are not parsed as an id.
   @Get('probability')
   @ApiOperation({
     summary: 'Preview the probability that an event takes place',

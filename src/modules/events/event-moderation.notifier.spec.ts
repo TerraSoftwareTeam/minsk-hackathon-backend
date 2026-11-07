@@ -3,7 +3,6 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { PushService } from '../notifications/push.service';
 import { EventModerationNotifier, MODERATION_PUSH_TYPES } from './event-moderation.notifier';
 
-/** Lets the fire-and-forget task finish. */
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 describe('EventModerationNotifier', () => {

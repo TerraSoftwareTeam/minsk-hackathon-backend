@@ -15,12 +15,10 @@ const { SPORTS, CULTURAL } = EventCategories;
 const { FINALIZED, EXPIRED, DECLINED, DECLINED_BY_ADMIN, ON_VOTE } =
   EventStatuses;
 
-/** Target event: Saturday 2026-12-05 12:00 Minsk time. */
 const TARGET = new Date('2026-12-05T12:00:00+03:00');
 
 let nextId = 0;
 
-/** Another Saturday (weeksAgo, negative = later) at `time` Minsk time. */
 const past = (
   time: string,
   status: EventStatuses,
@@ -130,7 +128,6 @@ describe('event probability', () => {
   });
 
   it('objective: bounded, monotonic, independent of order (random histories)', () => {
-    // Deterministic pseudo-random generator, so a failure is reproducible.
     let seed = 42;
     const rand = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31;
     const randomEvent = (status: EventStatuses): ProbabilityHistoryEvent => {
@@ -177,7 +174,6 @@ describe('event probability', () => {
   });
 
   it('counts a decided event that has not started yet, even at the same moment', () => {
-    // Two events at the same moment: one FINALIZED, the other is being estimated.
     const finalized = {
       ...past('12:00', FINALIZED),
       id: 'f',
@@ -189,7 +185,6 @@ describe('event probability', () => {
     expect(computeSuccessProbability(SPORTS, TARGET, [finalized], 'f')).toBe(
       P_BASE,
     );
-    // Later in the calendar also counts: the outcome is already known.
     expect(
       computeSuccessProbability(SPORTS, TARGET, [past('12:00', FINALIZED, -2)]),
     ).toBe(0.58);

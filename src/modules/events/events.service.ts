@@ -44,11 +44,6 @@ import {
   toVotingEventResponse,
 } from './event.mapper';
 
-/**
- * Statuses in which pupils may like an event: approved by the teacher (ON_VOTE)
- * and every status after it. EXPIRED is left out: it is also reached straight
- * from ON_MODERATION, without the teacher's approval.
- */
 export const LIKABLE_STATUSES = [
   EventStatuses.ON_VOTE,
   EventStatuses.ON_ADMIN_MODERATION,
@@ -56,7 +51,6 @@ export const LIKABLE_STATUSES = [
   EventStatuses.DECLINED_BY_ADMIN,
 ] as const;
 
-/** Everything an event response needs: its users (initiator, teacher, every voter) and image. */
 const WITH_USERS = {
   initiator: true,
   teacher: true,
@@ -64,17 +58,12 @@ const WITH_USERS = {
   votes: { select: { voter: true }, orderBy: { createdAt: 'asc' } },
 } as const;
 
-/** WITH_USERS plus the caller's own like (0 or 1 rows). */
 const withVoteState = (userId: string) =>
   ({
     ...WITH_USERS,
     likes: { where: { userId }, select: { userId: true } },
   }) as const;
 
-/**
- * A moderation step: which status it decides on and who may decide. Its
- * deadline is the decision deadline of the event (createdAt + 1 month).
- */
 type ModerationStage = {
   from: PendingStatus;
   mayModerate: (actor: User, event: EventWithUsers) => boolean;
@@ -96,49 +85,6 @@ const ADMIN_MODERATION: ModerationStage = {
   lateMessage: 'Too late to moderate: the event was not decided within a month of its creation',
 };
 
-/**
- * Event moderation flow:
- * 1. A PUPIL creates an event. It gets status ON_MODERATION and is assigned
- *    to a teacher of the pupil's class (teacher.class === pupil.class).
- *    If the class has no teacher yet, the event waits ON_MODERATION without
- *    one; the first teacher who registers into the class gets all such events
- *    (teacher-assignment.ts). Its deadline still runs from createdAt.
- * 2. That teacher sees it in their moderation list and either approves it
- *    (ON_VOTE) or declines it (DECLINED, optional reason).
- * 3. While the event is ON_VOTE, pupils vote for it (one vote per pupil).
- *    Who may vote depends on the scope, relative to the initiator's class:
- *    CLASS - same class, GRADE - same grade (number in the class name, "10A" -> 10),
- *    SCHOOL - any pupil.
- * 4. When the votes reach the event's voteThreshold (set by the initiator),
- *    the event moves to ON_ADMIN_MODERATION and voting closes.
- * 5. Any admin approves it (FINALIZED), setting the date (startsAt, in the
- *    future), or declines it (DECLINED_BY_ADMIN, optional reason).
- *
- * Date: an event has no startsAt until an admin approves it; nobody can set or
- * change it before or after that.
- *
- * Deadline (see event-deadlines.ts): every pending status (ON_MODERATION,
- * ON_VOTE, ON_ADMIN_MODERATION) expires at createdAt + 1 month (votingClosesAt):
- * the event was not approved, voted and decided by the admin in time.
- * Expired events become EXPIRED (expireOverdue, run every minute by
- * EventsScheduler). Past its deadline no vote or decision is accepted, even
- * before the scheduler runs, and the queues and the voting feed hide the event.
- *
- * Who may read an event: its initiator, its assigned teacher, any admin.
- *
- * Push notifications (EventModerationNotifier): the teacher gets one when an
- * event is assigned to them (1), every admin when an event reaches
- * ON_ADMIN_MODERATION (4), the author on every decision of the teacher (2) and
- * of an admin (5). Sent after the change is committed.
- *
- * Likes: from ON_VOTE on (LIKABLE_STATUSES) any pupil, not only the event's
- * audience, may like the event, once, and take the like back in any status.
- * Every event response carries the like count.
- *
- * Image (optional, at most one per event): the author sets, replaces or
- * removes it until the event is decided, i.e. while it is pending and not past
- * its deadline. An admin may remove it in any status (e.g. an unsuitable picture).
- */
 @Injectable()
 export class EventsService {
   private readonly logger = new Logger(EventsService.name);
@@ -174,8 +120,6 @@ export class EventsService {
       }),
     );
     if (!teacher) {
-      // A teacher who registered between the lookup and the insert did not see
-      // this event when taking the class's events: look again now it is committed.
       const lateTeacher = await this.findClassTeacher(actor.class);
       if (lateTeacher) {
         await assignEventsWithoutTeacher(this.prisma, lateTeacher.id, actor.class);
@@ -188,17 +132,11 @@ export class EventsService {
     return this.toResponse(event);
   }
 
-  /**
-   * Preview: the probability that an event of this category takes place, at
-   * this start time if given (e.g. for the admin choosing the date), otherwise
-   * whatever the time (see event-probability.ts).
-   */
   async previewProbability(category: EventCategories, startsAt: Date | null): Promise<number> {
     const history = await this.loadHistory([{ category }]);
     return computeSuccessProbability(category, startsAt, history);
   }
 
-  /** The teacher's queue: events assigned to them that still await a decision. */
   async findForModeration(actor: User): Promise<EventResponseDto[]> {
     if (actor.role !== UserRoles.TEACHER) {
       throw new ForbiddenException('Only a teacher has a moderation list');
@@ -215,7 +153,6 @@ export class EventsService {
     return this.toResponses(events, toEventResponse);
   }
 
-  /** The author's own events in any status, newest first, with their vote count and the author's like. */
   async findMine(actor: User): Promise<VotingEventResponseDto[]> {
     if (actor.role !== UserRoles.PUPIL) {
       throw new ForbiddenException(
@@ -232,20 +169,13 @@ export class EventsService {
     );
   }
 
-  /**
-   * Pupil's voting feed: ON_VOTE events whose scope includes the pupil, newest first.
-   * Uses the same isInScope rule as vote(), so every listed event can be voted for.
-   */
   async findForVoting(actor: User): Promise<VotingEventResponseDto[]> {
     if (actor.role !== UserRoles.PUPIL) {
       throw new ForbiddenException('Only a pupil has a voting list');
     }
-    // CLASS and SCHOOL are filtered by the DB. The grade is parsed from the class
-    // name, which SQL cannot match the same way, so GRADE events are narrowed below.
     const events = await this.prisma.event.findMany({
       where: {
         status: EventStatuses.ON_VOTE,
-        // Voting still open: an overdue event may wait up to a minute for expiration.
         createdAt: { gt: deadlineCutoff() },
         OR: [
           { scope: Scopes.SCHOOL },
@@ -262,7 +192,6 @@ export class EventsService {
     );
   }
 
-  /** Admin queue: events that passed the vote and await an admin decision, oldest first. */
   async findForAdminModeration(actor: User): Promise<EventResponseDto[]> {
     if (actor.role !== UserRoles.ADMIN) {
       throw new ForbiddenException('Only an admin has the admin moderation list');
@@ -299,7 +228,6 @@ export class EventsService {
     });
   }
 
-  /** The admin approves the event and sets its date, which must be in the future. */
   async adminApprove(actor: User, id: string, dto: AdminApproveEventDto): Promise<EventResponseDto> {
     const startsAt = new Date(dto.startsAt);
     if (startsAt.getTime() <= Date.now()) {
@@ -318,7 +246,6 @@ export class EventsService {
     });
   }
 
-  /** A pupil votes for an event that is ON_VOTE. Each pupil can vote for an event once. */
   async vote(actor: User, id: string): Promise<EventVoteResponseDto> {
     if (actor.role !== UserRoles.PUPIL) {
       throw new ForbiddenException('Only a pupil can vote for an event');
@@ -344,31 +271,22 @@ export class EventsService {
     try {
       result = await this.prisma.$transaction((tx) => this.castVote(tx, id, actor.id));
     } catch (error) {
-      // The (eventId, voterId) primary key rejects a second vote, also under a race.
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         throw new ConflictException('You have already voted for this event');
       }
       throw error;
     }
-    // castVote returns ON_ADMIN_MODERATION only for the vote that made the transition, so admins are notified once.
     if (result.status === EventStatuses.ON_ADMIN_MODERATION) {
       this.notifier.awaitsAdmin(id);
     }
     return result;
   }
 
-  /**
-   * A pupil takes their vote back (unsubscribes from the event): -1 to the count.
-   * Only while the event is ON_VOTE and voting is open: once a vote has moved the
-   * event on to the admin, the votes that got it there stay.
-   */
   async unvote(actor: User, id: string): Promise<EventVoteResponseDto> {
     if (actor.role !== UserRoles.PUPIL) {
       throw new ForbiddenException('Only a pupil can vote for an event');
     }
     return this.prisma.$transaction(async (tx) => {
-      // The same row lock as castVote: a concurrent vote cannot move the event on
-      // to the admin while this vote is being taken back.
       const locked = await this.lockForVoting(tx, id);
       this.assertVotingOpen(locked);
 
@@ -388,10 +306,6 @@ export class EventsService {
     });
   }
 
-  /**
-   * Any pupil likes an event in a LIKABLE_STATUSES status, whatever its scope:
-   * +1 to its count. A second like by the same pupil changes nothing.
-   */
   async like(actor: User, id: string): Promise<EventLikeResponseDto> {
     if (actor.role !== UserRoles.PUPIL) {
       throw new ForbiddenException('Only a pupil can like an event');
@@ -405,7 +319,6 @@ export class EventsService {
         `The event can be liked once the teacher has approved it, its status is ${event.status}`,
       );
     }
-    // skipDuplicates: a repeated or concurrent like of the same pupil is a no-op, not an error.
     await this.prisma.eventLike.createMany({
       data: [{ eventId: id, userId: actor.id }],
       skipDuplicates: true,
@@ -413,10 +326,6 @@ export class EventsService {
     return { eventId: id, liked: true, likesCount: await this.countLikes(id) };
   }
 
-  /**
-   * Takes the pupil's like back: -1 to the count. Allowed in any status (e.g.
-   * after the event expired). Without a like there is nothing to take back.
-   */
   async unlike(actor: User, id: string): Promise<EventLikeResponseDto> {
     if (actor.role !== UserRoles.PUPIL) {
       throw new ForbiddenException('Only a pupil can like an event');
@@ -433,7 +342,6 @@ export class EventsService {
     return this.prisma.eventLike.count({ where: { eventId } });
   }
 
-  /** Sets or replaces the event image. The previous image is deleted. */
   async setImage(actor: User, id: string, file: Express.Multer.File): Promise<EventResponseDto> {
     const event = await this.findEventOrThrow(id);
     if (actor.id !== event.initiatorId) {
@@ -441,13 +349,11 @@ export class EventsService {
     }
     this.assertImageEditable(event);
 
-    // Uploaded outside the transaction: the row lock is not held during the network call.
     const image = await this.images.uploadImage(actor.id, file);
     let previousImageId: string | null;
     try {
       previousImageId = await this.prisma.$transaction(async (tx) => {
         const locked = await this.lockForImage(tx, id);
-        // The status may have changed during the upload.
         this.assertImageEditable(locked);
         await tx.event.update({ where: { id }, data: { imageId: image.id } });
         return locked.imageId;
@@ -462,7 +368,6 @@ export class EventsService {
     return this.toResponse(await this.findEventOrThrow(id));
   }
 
-  /** Removes the event image, if there is one. The author until the decision, an admin always. */
   async removeImage(actor: User, id: string): Promise<EventResponseDto> {
     const event = await this.findEventOrThrow(id);
     const isAdmin = actor.role === UserRoles.ADMIN;
@@ -489,12 +394,6 @@ export class EventsService {
     return this.toResponse(await this.findEventOrThrow(id));
   }
 
-  /**
-   * Pending events past the deadline of their status become EXPIRED.
-   * Returns how many were expired. Safe to run concurrently with votes and
-   * decisions: they hold the row lock or update conditionally on the status,
-   * and this update re-checks the status after the lock.
-   */
   async expireOverdue(now: Date = new Date()): Promise<number> {
     const { count } = await this.prisma.event.updateMany({
       where: {
@@ -509,14 +408,11 @@ export class EventsService {
     return count;
   }
 
-  // ---- internals ----
-
   private async toResponse(event: EventWithUsers): Promise<EventResponseDto> {
     const [response] = await this.toResponses([event], toEventResponse);
     return response;
   }
 
-  /** Maps events with their success probability and like count, loading them once for all of the events. */
   private async toResponses<E extends EventWithUsers, R>(
     events: E[],
     map: (event: E, computed: EventComputed) => R,
@@ -536,7 +432,6 @@ export class EventsService {
     );
   }
 
-  /** Number of likes of each event; events without likes are missing from the map. */
   private async loadLikeCounts(eventIds: string[]): Promise<Map<string, number>> {
     const groups = await this.prisma.eventLike.groupBy({
       by: ['eventId'],
@@ -546,11 +441,6 @@ export class EventsService {
     return new Map(groups.map((group) => [group.eventId, group._count._all]));
   }
 
-  /**
-   * FINALIZED events (they have the date set by the admin) in the categories of
-   * `targets`: the only ones the probability learns from.
-   * Loaded on every request, so the probability always reflects the current state.
-   */
   private async loadHistory(
     targets: { category: EventCategories }[],
   ): Promise<ProbabilityHistoryEvent[]> {
@@ -564,7 +454,6 @@ export class EventsService {
     });
   }
 
-  /** The image can change while the event is pending and not past its deadline. */
   private assertImageEditable(event: { status: EventStatuses; createdAt: Date }): void {
     if (!isPending(event.status) || isPastDeadline(event.createdAt)) {
       throw new ConflictException(
@@ -573,7 +462,6 @@ export class EventsService {
     }
   }
 
-  /** Locks the event row, so concurrent image changes are applied one at a time. */
   private async lockForImage(
     tx: Prisma.TransactionClient,
     id: string,
@@ -587,7 +475,6 @@ export class EventsService {
     return locked;
   }
 
-  /** Deletes an image no event uses anymore. A failure is logged, not returned: the event is already consistent. */
   private async discardImage(imageId: string): Promise<void> {
     try {
       await this.images.deleteImage(imageId);
@@ -599,7 +486,6 @@ export class EventsService {
     }
   }
 
-  /** Votes are accepted only while the event is ON_VOTE and before the voting deadline. */
   private assertVotingOpen(event: { status: EventStatuses; createdAt: Date }): void {
     if (event.status !== EventStatuses.ON_VOTE) {
       throw new ConflictException(`Event is not on vote, its status is ${event.status}`);
@@ -609,7 +495,6 @@ export class EventsService {
     }
   }
 
-  /** Locks the event row until the end of the transaction, so votes on it are serialized. */
   private async lockForVoting(
     tx: Prisma.TransactionClient,
     eventId: string,
@@ -624,11 +509,6 @@ export class EventsService {
     return locked;
   }
 
-  /**
-   * Locks the event row, so votes for one event are applied one at a time:
-   * the threshold transition happens exactly once, and no vote is accepted
-   * after the event has left ON_VOTE.
-   */
   private async castVote(
     tx: Prisma.TransactionClient,
     eventId: string,
@@ -648,7 +528,6 @@ export class EventsService {
     return { eventId, votesCount, voteThreshold: locked.voteThreshold, status };
   }
 
-  /** Whether a pupil of `voterClass` belongs to the audience of an event created in `eventClass`. */
   private isInScope(voterClass: string | null, eventClass: string | null, scope: Scopes): boolean {
     switch (scope) {
       case Scopes.SCHOOL:
@@ -670,7 +549,6 @@ export class EventsService {
     );
   }
 
-  /** Applies a moderation decision: only an allowed actor, only while the event is in `stage.from`. */
   private async moderate(
     stage: ModerationStage,
     actor: User,
@@ -688,9 +566,6 @@ export class EventsService {
       throw new ConflictException(stage.lateMessage);
     }
 
-    // The status condition makes the transition atomic: if two requests race,
-    // only the first one changes the row, the second gets 409. The createdAt
-    // condition does the same against the expiration job.
     const { count } = await this.prisma.event.updateMany({
       where: { id, status: stage.from, createdAt: { gt: deadlineCutoff() } },
       data,
@@ -698,15 +573,10 @@ export class EventsService {
     if (count === 0) {
       throw new ConflictException('Event has already been moderated');
     }
-    // Only the request that changed the row gets here, so the author is notified once.
     this.notifier.decisionMade(event, data.status, data.declineReason ?? null);
     return this.toResponse(await this.findEventOrThrow(id));
   }
 
-  /**
-   * Picks the teacher of the class, null if it has none yet. If a class has
-   * several teachers, the one with the smallest id is chosen, so the choice is stable.
-   */
   private findClassTeacher(className: string): Promise<User | null> {
     return this.prisma.user.findFirst({
       where: { role: UserRoles.TEACHER, class: className },
@@ -734,10 +604,6 @@ export class EventsService {
   }
 }
 
-/**
- * Grade (parallel) of a class: the first number in its name, e.g. "10A" -> 10, "5 Б" -> 5.
- * The whole number is taken, not one digit, so "1A" and "11A" are different grades.
- */
 function gradeOf(className: string | null): number | null {
   const match = className?.match(/\d+/);
   return match ? Number(match[0]) : null;
