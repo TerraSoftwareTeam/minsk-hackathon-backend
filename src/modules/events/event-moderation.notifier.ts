@@ -7,6 +7,8 @@ export const MODERATION_PUSH_TYPES = {
   TEACHER: 'EVENT_TEACHER_MODERATION',
   ADMIN: 'EVENT_ADMIN_MODERATION',
   DECISION: 'EVENT_DECISION',
+  SENT_TO_ADMIN: 'EVENT_SENT_TO_ADMIN',
+  FINALIZED_BY_VOTES: 'EVENT_FINALIZED_BY_VOTES',
 } as const;
 
 export type DecisionStatus = 'ON_VOTE' | 'DECLINED' | 'FINALIZED' | 'DECLINED_BY_ADMIN';
@@ -78,24 +80,51 @@ export class EventModerationNotifier {
   awaitsAdmin(eventId: string): void {
     this.run(async () => {
       const [event, admins] = await Promise.all([
-        this.prisma.event.findUnique({ where: { id: eventId }, select: { name: true } }),
-        this.prisma.user.findMany({ where: { role: UserRoles.ADMIN }, select: { id: true } }),
+        this.prisma.event.findUnique({
+          where: { id: eventId },
+          select: { name: true, initiatorId: true, createdByRole: true },
+        }),
+        this.adminIds(),
       ]);
       if (!event) {
         return;
       }
-      await this.push.sendToUsers(
-        admins.map((admin) => admin.id),
-        {
+      const status = EventStatuses.ON_ADMIN_MODERATION;
+      await Promise.all([
+        this.push.sendToUsers(admins, {
           title: 'Мероприятие ждёт вашего решения',
           body: `«${event.name}» набрало нужное число голосов`,
-          data: {
-            type: MODERATION_PUSH_TYPES.ADMIN,
-            eventId,
-            status: EventStatuses.ON_ADMIN_MODERATION,
-          },
+          data: { type: MODERATION_PUSH_TYPES.ADMIN, eventId, status },
+        }),
+        event.createdByRole === UserRoles.TEACHER
+          ? this.push.sendToUsers([event.initiatorId], {
+              title: 'Мероприятие передано администрации',
+              body: `«${event.name}» набрало нужное число голосов и ждёт решения администрации`,
+              data: { type: MODERATION_PUSH_TYPES.SENT_TO_ADMIN, eventId, status },
+            })
+          : Promise.resolve(),
+      ]);
+    });
+  }
+
+  finalizedByVotes(eventId: string): void {
+    this.run(async () => {
+      const [event, admins] = await Promise.all([
+        this.prisma.event.findUnique({ where: { id: eventId }, select: { name: true } }),
+        this.adminIds(),
+      ]);
+      if (!event) {
+        return;
+      }
+      await this.push.sendToUsers(admins, {
+        title: 'Школьное мероприятие состоится',
+        body: `«${event.name}» набрало нужное число голосов`,
+        data: {
+          type: MODERATION_PUSH_TYPES.FINALIZED_BY_VOTES,
+          eventId,
+          status: EventStatuses.FINALIZED,
         },
-      );
+      });
     });
   }
 
@@ -116,6 +145,14 @@ export class EventModerationNotifier {
         data: { type: MODERATION_PUSH_TYPES.DECISION, eventId: event.id, status },
       }),
     );
+  }
+
+  private async adminIds(): Promise<string[]> {
+    const admins = await this.prisma.user.findMany({
+      where: { role: UserRoles.ADMIN },
+      select: { id: true },
+    });
+    return admins.map((admin) => admin.id);
   }
 
   private run(task: () => Promise<void>): void {

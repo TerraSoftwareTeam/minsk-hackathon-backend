@@ -298,6 +298,8 @@ export class EventsService {
     }
     if (result.status === EventStatuses.ON_ADMIN_MODERATION) {
       this.notifier.awaitsAdmin(id);
+    } else if (result.status === EventStatuses.FINALIZED) {
+      this.notifier.finalizedByVotes(id);
     }
     return result;
   }

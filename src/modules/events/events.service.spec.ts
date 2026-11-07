@@ -99,7 +99,12 @@ describe('EventsService', () => {
     $transaction: jest.Mock;
   };
   let images: { uploadImage: jest.Mock; deleteImage: jest.Mock };
-  let notifier: { awaitsTeachers: jest.Mock; awaitsAdmin: jest.Mock; decisionMade: jest.Mock };
+  let notifier: {
+    awaitsTeachers: jest.Mock;
+    awaitsAdmin: jest.Mock;
+    finalizedByVotes: jest.Mock;
+    decisionMade: jest.Mock;
+  };
   let tx: {
     $queryRaw: jest.Mock;
     eventVote: { create: jest.Mock; count: jest.Mock; deleteMany: jest.Mock };
@@ -150,7 +155,12 @@ describe('EventsService', () => {
       uploadImage: jest.fn().mockResolvedValue({ id: 'img-new', url: 'https://cdn/new.jpg' }),
       deleteImage: jest.fn().mockResolvedValue(undefined),
     };
-    notifier = { awaitsTeachers: jest.fn(), awaitsAdmin: jest.fn(), decisionMade: jest.fn() };
+    notifier = {
+      awaitsTeachers: jest.fn(),
+      awaitsAdmin: jest.fn(),
+      finalizedByVotes: jest.fn(),
+      decisionMade: jest.fn(),
+    };
     service = new EventsService(
       prisma as unknown as PrismaService,
       images as unknown as ImagesService,
@@ -736,6 +746,28 @@ describe('EventsService', () => {
       );
     });
 
+    it("a teacher's event: the admin decision goes to the teacher who created it", async () => {
+      const teacherEvent = (over: Partial<EventWithUsers> = {}) =>
+        storedEvent({
+          status: EventStatuses.ON_ADMIN_MODERATION,
+          initiatorId: teacher.id,
+          initiator: teacher,
+          createdByRole: UserRoles.TEACHER,
+          ...over,
+        });
+      prisma.event.findUnique
+        .mockResolvedValueOnce(teacherEvent())
+        .mockResolvedValueOnce(teacherEvent({ status: EventStatuses.DECLINED_BY_ADMIN, declineReason: 'No budget' }));
+
+      await service.adminDecline(admin, 'event-1', { reason: 'No budget' });
+
+      expect(notifier.decisionMade).toHaveBeenCalledWith(
+        expect.objectContaining({ initiatorId: teacher.id }),
+        EventStatuses.DECLINED_BY_ADMIN,
+        'No budget',
+      );
+    });
+
     it('admin declines with a reason: -> DECLINED_BY_ADMIN', async () => {
       await service.adminDecline(admin, 'event-1', { reason: 'Not this term' });
       expect(prisma.event.updateMany.mock.calls[0][0].data).toEqual({
@@ -864,6 +896,7 @@ describe('EventsService', () => {
         });
         expect(result.status).toBe(EventStatuses.FINALIZED);
         expect(notifier.awaitsAdmin).not.toHaveBeenCalled();
+        expect(notifier.finalizedByVotes).toHaveBeenCalledWith('event-1');
       });
 
       it('Conflict, no vote stored, once the date has come', async () => {
@@ -926,6 +959,7 @@ describe('EventsService', () => {
         status: EventStatuses.ON_VOTE,
       });
       expect(notifier.awaitsAdmin).not.toHaveBeenCalled();
+      expect(notifier.finalizedByVotes).not.toHaveBeenCalled();
     });
 
     it('the vote that reaches the threshold moves the event to ON_ADMIN_MODERATION', async () => {
@@ -939,6 +973,7 @@ describe('EventsService', () => {
       });
       expect(result.status).toBe(EventStatuses.ON_ADMIN_MODERATION);
       expect(notifier.awaitsAdmin).toHaveBeenCalledWith('event-1');
+      expect(notifier.finalizedByVotes).not.toHaveBeenCalled();
     });
 
     it('threshold 1: the first vote already moves the event', async () => {

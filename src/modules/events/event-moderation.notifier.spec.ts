@@ -77,6 +77,69 @@ describe('EventModerationNotifier', () => {
     });
   });
 
+  describe('event that collected its votes', () => {
+    it('a teacher author learns it went to the admins', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        name: 'Trip',
+        initiatorId: 'teacher-1',
+        createdByRole: UserRoles.TEACHER,
+      });
+      notifier.awaitsAdmin('event-1');
+      await flush();
+
+      expect(push.sendToUsers).toHaveBeenCalledTimes(2);
+      expect(push.sendToUsers).toHaveBeenCalledWith(['admin-1', 'admin-2'], expect.anything());
+      expect(push.sendToUsers).toHaveBeenCalledWith(['teacher-1'], {
+        title: 'Мероприятие передано администрации',
+        body: '«Trip» набрало нужное число голосов и ждёт решения администрации',
+        data: {
+          type: MODERATION_PUSH_TYPES.SENT_TO_ADMIN,
+          eventId: 'event-1',
+          status: EventStatuses.ON_ADMIN_MODERATION,
+        },
+      });
+    });
+
+    it('a pupil author is not pushed, only the admins', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        name: 'Trip',
+        initiatorId: 'pupil-1',
+        createdByRole: UserRoles.PUPIL,
+      });
+      notifier.awaitsAdmin('event-1');
+      await flush();
+
+      expect(push.sendToUsers).toHaveBeenCalledTimes(1);
+      expect(push.sendToUsers).toHaveBeenCalledWith(['admin-1', 'admin-2'], expect.anything());
+    });
+
+    it('an admin event FINALIZED by the votes: every admin is told', async () => {
+      notifier.finalizedByVotes('event-1');
+      await flush();
+
+      expect(prisma.user.findMany).toHaveBeenCalledWith({
+        where: { role: UserRoles.ADMIN },
+        select: { id: true },
+      });
+      expect(push.sendToUsers).toHaveBeenCalledWith(['admin-1', 'admin-2'], {
+        title: 'Школьное мероприятие состоится',
+        body: '«Trip» набрало нужное число голосов',
+        data: {
+          type: MODERATION_PUSH_TYPES.FINALIZED_BY_VOTES,
+          eventId: 'event-1',
+          status: EventStatuses.FINALIZED,
+        },
+      });
+    });
+
+    it('nobody is pushed for a deleted event', async () => {
+      prisma.event.findUnique.mockResolvedValue(null);
+      notifier.finalizedByVotes('event-1');
+      await flush();
+      expect(push.sendToUsers).not.toHaveBeenCalled();
+    });
+  });
+
   describe('decision to the author', () => {
     const event = { id: 'event-1', name: 'Trip', initiatorId: 'pupil-1' };
     const sent = () => push.sendToUsers.mock.calls[0];

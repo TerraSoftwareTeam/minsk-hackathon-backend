@@ -55,6 +55,9 @@ API (NestJS, контейнер)
 - Кому приходят пуши (`data`: `type`, `eventId`, `status`):
   - учителю — новое мероприятие на модерацию (`EVENT_TEACHER_MODERATION`);
   - всем админам — мероприятие набрало голоса (`EVENT_ADMIN_MODERATION`);
+  - учителю-автору — его мероприятие набрало голоса и ушло администрации (`EVENT_SENT_TO_ADMIN`,
+    `status`: `ON_ADMIN_MODERATION`); решение администрации он получает как `EVENT_DECISION`;
+  - всем админам — мероприятие админа набрало голоса и стало `FINALIZED` (`EVENT_FINALIZED_BY_VOTES`);
   - автору — решение по его мероприятию (`EVENT_DECISION`, `status`: `ON_VOTE` / `DECLINED` — учитель,
     `FINALIZED` / `DECLINED_BY_ADMIN` — администрация; причина отказа в тексте, обрезана до 200 символов).
 - Мёртвые токены (`UNREGISTERED`, `INVALID_ARGUMENT`) удаляются автоматически после отправки.
