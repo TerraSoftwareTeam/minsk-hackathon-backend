@@ -11,15 +11,11 @@ model Event {
   /// Votes needed to move the event from ON_VOTE to ON_ADMIN_MODERATION. Always >= 1.
   voteThreshold Int
 
-  /// When the event takes place. Never changed once set (the admin moderating a pupil
-  /// event can only approve or decline it).
-  /// Pupil events: chosen by the pupil on creation, in every status (old events rejected
-  /// before that may have none). Voting closes 3 days before it: not enough votes by
-  /// then -> EXPIRED. Teacher and admin moderation of a pupil event have no deadline.
-  /// Teacher events: set by the admin who approves the event (FINALIZED), null in every
-  /// other status.
-  /// Admin (school) events: set by the admin on creation, in every status; it is
-  /// also their deadline: not FINALIZED by then -> EXPIRED.
+  /// When the event takes place: chosen by the author on creation, whatever their role,
+  /// and never changed (moderators only approve or decline). Present in every status;
+  /// only old events rejected before authors chose dates may have none.
+  /// It sets the deadline of every pending stage (teacher moderation, voting, admin
+  /// moderation): 3 days before it (event-deadlines.ts); not decided by then -> EXPIRED.
   startsAt DateTime?
 
   initiator   User   @relation("EventInitiator", fields: [initiatorId], references: [id])
@@ -28,8 +24,8 @@ model Event {
   /// Role of the initiator when the event was created; it picks the flow:
   /// PUPIL: ON_MODERATION (teachers) -> ON_VOTE -> ON_ADMIN_MODERATION -> FINALIZED.
   /// TEACHER: starts ON_VOTE (no teacher moderation) -> ON_ADMIN_MODERATION -> FINALIZED.
-  /// ADMIN: a SCHOOL event with a date, no moderation: ON_VOTE -> FINALIZED when the
-  /// votes reach voteThreshold, EXPIRED at startsAt otherwise.
+  /// ADMIN: a SCHOOL event, no moderation: ON_VOTE -> FINALIZED when the votes reach
+  /// voteThreshold, EXPIRED 3 days before startsAt otherwise.
   createdByRole UserRoles @default(PUPIL)
 
   // No moderator column: the moderators are derived from the status. ON_MODERATION:
@@ -42,9 +38,6 @@ model Event {
   image   Image?  @relation("EventImage", fields: [imageId], references: [id], onDelete: SetNull)
   imageId String? @unique
 
-  /// Pending deadlines of teacher events are derived from it: createdAt + 1 month
-  /// (event-deadlines.ts). Pupil events expire on vote 3 days before startsAt, admin
-  /// events at startsAt.
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

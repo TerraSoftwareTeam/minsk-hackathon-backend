@@ -590,7 +590,7 @@ const PAST: SeedEvent[] = [
   },
 ];
 
-/** Upcoming events in every pending status. Ones on vote must be more than 3 days before their date. */
+/** Upcoming events in every pending status. Pending ones must be more than 3 days before their date. */
 const UPCOMING: SeedEvent[] = [
   // teacher queues
   {
@@ -821,8 +821,8 @@ function likesFor(event: SeedEvent): number {
   );
 }
 
-/** Pupil events: voting closes this long before the date, as in src/modules/events/event-deadlines.ts. */
-const VOTING_CLOSES_BEFORE_START_MS = 3 * DAY_MS;
+/** Every pending stage ends this long before the date, as in src/modules/events/event-deadlines.ts. */
+const DECIDED_BEFORE_START_MS = 3 * DAY_MS;
 
 /** Requests are filed 1-3 weeks before the planned date, never in the future. */
 function seedCreatedAt(event: SeedEvent, planned: Date, now: Date): Date {
@@ -858,20 +858,27 @@ function assertConsistent(
   }
   if (createdAt.getTime() >= planned.getTime())
     fail('created after its date: the pupil chooses a date in the future');
-  // Only voting has a deadline: teacher and admin moderation have none.
-  const votingClosed =
-    planned.getTime() - VOTING_CLOSES_BEFORE_START_MS <= now.getTime();
+  const pending = [
+    ON_MODERATION,
+    ON_VOTE,
+    ON_ADMIN_MODERATION,
+  ] as EventStatuses[];
+  const overdue = planned.getTime() - DECIDED_BEFORE_START_MS <= now.getTime();
   const likes = likesFor(event);
   if (likes > ALL_PUPILS.length)
     fail(`${likes} likes but only ${ALL_PUPILS.length} pupils in the school`);
   if (likes > 0 && !LIKABLE.has(event.status))
     fail(`liked in status ${event.status}, before the teacher approved it`);
-  if (!CLASSES[event.cls].teacher && event.status !== ON_MODERATION)
+  if (
+    !CLASSES[event.cls].teacher &&
+    event.status !== ON_MODERATION &&
+    event.status !== EXPIRED
+  )
     fail('moved past moderation in a class that has no teacher');
-  if (event.status === ON_VOTE && votingClosed)
-    fail('on vote, but voting has closed (3 days before its date)');
-  if (event.status === EXPIRED && !votingClosed)
-    fail('expired before voting closed (3 days before its date)');
+  if (pending.includes(event.status) && overdue)
+    fail('pending, but its deadline (3 days before its date) has passed');
+  if (event.status === EXPIRED && !overdue)
+    fail('expired before its deadline (3 days before its date)');
 }
 
 async function main(): Promise<void> {
@@ -955,7 +962,7 @@ async function main(): Promise<void> {
             status: event.status,
             declineReason: event.declineReason ?? null,
             voteThreshold: event.voteThreshold,
-            // The pupil chooses the date on creation, it is kept in every status.
+            // The author chooses the date on creation, it is kept in every status.
             startsAt: planned,
             initiatorId: initiator,
             createdAt,

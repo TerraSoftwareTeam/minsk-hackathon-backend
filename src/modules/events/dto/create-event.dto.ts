@@ -72,21 +72,18 @@ export class CreateEventDto {
   @Max(10000)
   voteThreshold!: number;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     example: '2026-12-05T12:00:00+03:00',
     format: 'date-time',
     description:
-      'When the event takes place, ISO 8601 date-time with a timezone (Z or ±hh:mm), in the future. Never changed afterwards, ' +
-      'not even by the admin on moderation (who can only approve or decline). ' +
-      'Pupil: required; voting closes 3 days before it, without enough votes by then the event becomes EXPIRED. ' +
-      'Admin: required; it is also the voting deadline. ' +
-      'Teacher: must not be sent, the date is set by the admin on approval',
+      'Required for every role: when the event takes place, ISO 8601 date-time with a timezone (Z or ±hh:mm), in the future. ' +
+      'Never changed afterwards, not even by a moderator (who can only approve or decline). ' +
+      'The event must be decided (teacher moderation, voting, admin moderation) 3 days before it, otherwise it becomes EXPIRED',
   })
-  @IsOptional()
   @IsISO8601({ strict: true })
   @Matches(/T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/, {
     message:
       'startsAt must be a date-time with a timezone, e.g. 2026-12-05T12:00:00+03:00',
   })
-  startsAt?: string;
+  startsAt!: string;
 }

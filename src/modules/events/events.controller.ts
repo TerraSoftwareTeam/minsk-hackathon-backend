@@ -41,7 +41,6 @@ import {
   MAX_IMAGE_SIZE_BYTES,
 } from '../images/images.constants';
 import { ValidateImageFilePipe } from '../images/pipes/validate-image-file.pipe';
-import { AdminApproveEventDto } from './dto/admin-approve-event.dto';
 import { CreateEventDto } from './dto/create-event.dto';
 import { DeclineEventDto } from './dto/decline-event.dto';
 import { EventResponseDto } from './dto/event-response.dto';
@@ -66,21 +65,20 @@ export class EventsController {
     description:
       "Any role; the role picks the flow (createdByRole in the response).\n\n" +
       "PUPIL: status ON_MODERATION, moderated by every teacher of the pupil's class (they all get a push). " +
-      'startsAt required (in the future): the pupil chooses the date, nobody can change it afterwards ' +
-      '(the admin can only approve or decline). Teacher and admin moderation have no deadline; ' +
-      'voting closes 3 days before startsAt (votingClosesAt), without enough votes by then -> EXPIRED.\n\n' +
+      'Then ON_VOTE -> ON_ADMIN_MODERATION -> FINALIZED.\n\n' +
       'TEACHER (school event): no teacher moderation, status ON_VOTE at once; scope relative to the teacher\'s class. ' +
-      'No startsAt: on voteThreshold votes -> ON_ADMIN_MODERATION, then the admin approves with a date or declines. ' +
-      'votingClosesAt = createdAt + 1 month: voting and the admin decision must finish by then.\n\n' +
-      'ADMIN (school event): no moderation, scope SCHOOL, startsAt required (in the future). Status ON_VOTE; ' +
-      'on voteThreshold votes -> FINALIZED, otherwise EXPIRED at startsAt (votingClosesAt = startsAt).',
+      'On voteThreshold votes -> ON_ADMIN_MODERATION, then the admin approves or declines.\n\n' +
+      'ADMIN (school event): no moderation, scope SCHOOL. Status ON_VOTE; on voteThreshold votes -> FINALIZED.\n\n' +
+      'Every role: startsAt is required (in the future) and nobody can change it afterwards: moderators only approve or decline. ' +
+      'Every pending stage (teacher moderation, voting, admin moderation) must finish 3 days before startsAt ' +
+      '(votingClosesAt), otherwise the event becomes EXPIRED.',
   })
   @ApiBody({ type: CreateEventDto })
   @ApiCreatedResponse({ type: EventResponseDto })
   @ApiBadRequestResponse({
     description:
-      'Validation failed (incl. an unknown field); startsAt sent by a teacher; ' +
-      'pupil or admin: startsAt missing or not in the future; admin: scope other than SCHOOL; pupil or teacher without a class',
+      'Validation failed (incl. an unknown field); startsAt missing or not in the future; ' +
+      'admin: scope other than SCHOOL; pupil or teacher without a class',
   })
   @ApiConflictResponse({ description: 'Event with this name already exists' })
   create(
@@ -118,7 +116,7 @@ export class EventsController {
   @ApiOperation({
     summary: "Teacher's moderation list",
     description:
-      "Teacher only. Events of pupils of the caller's class with status ON_MODERATION, oldest first. Teacher moderation has no deadline.",
+      "Teacher only. Events of pupils of the caller's class with status ON_MODERATION, oldest first. Events past their deadline (3 days before startsAt) are hidden.",
   })
   @ApiOkResponse({ type: [EventResponseDto] })
   @ApiForbiddenResponse({ description: 'Caller is not a teacher' })
@@ -154,7 +152,7 @@ export class EventsController {
     summary: "Admin's moderation list",
     description:
       'Admin only. Events with status ON_ADMIN_MODERATION (passed the vote), oldest first. ' +
-      'Pupil events have no deadline here; teacher events past theirs (a month after creation) are hidden.',
+      'Events past their deadline (3 days before startsAt) are hidden.',
   })
   @ApiOkResponse({ type: [EventResponseDto] })
   @ApiForbiddenResponse({ description: 'Caller is not an admin' })
@@ -192,7 +190,7 @@ export class EventsController {
   @ApiNotFoundResponse({ description: 'Event not found' })
   @ApiConflictResponse({
     description:
-      'Event is not on moderation anymore',
+      'Event is not on moderation anymore, or its deadline (3 days before startsAt) has passed',
   })
   approve(
     @CurrentUser() actor: User,
@@ -215,7 +213,7 @@ export class EventsController {
   @ApiNotFoundResponse({ description: 'Event not found' })
   @ApiConflictResponse({
     description:
-      'Event is not on moderation anymore',
+      'Event is not on moderation anymore, or its deadline (3 days before startsAt) has passed',
   })
   decline(
     @CurrentUser() actor: User,
@@ -230,26 +228,21 @@ export class EventsController {
   @ApiOperation({
     summary: 'Admin approves an event',
     description:
-      'Admin only. ON_ADMIN_MODERATION -> FINALIZED. Pupil event: no body, its date was chosen by the pupil and cannot be changed. ' +
-      'Teacher event: the admin sets the date (startsAt, in the future); it cannot be changed afterwards.',
+      'Admin only. ON_ADMIN_MODERATION -> FINALIZED. No body: the date was chosen by the author and cannot be changed.',
   })
-  @ApiUuidParam(
-    'Teacher event: startsAt is missing, has no timezone, or is not in the future. Pupil event: startsAt is sent',
-  )
-  @ApiBody({ type: AdminApproveEventDto, required: false })
+  @ApiUuidParam()
   @ApiOkResponse({ type: EventResponseDto })
   @ApiForbiddenResponse({ description: 'Caller is not an admin' })
   @ApiNotFoundResponse({ description: 'Event not found' })
   @ApiConflictResponse({
     description:
-      'Event is not on admin moderation, or (teacher event) its deadline, a month after creation, has passed',
+      'Event is not on admin moderation, or its deadline (3 days before startsAt) has passed',
   })
   adminApprove(
     @CurrentUser() actor: User,
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: AdminApproveEventDto,
   ): Promise<EventResponseDto> {
-    return this.eventsService.adminApprove(actor, id, dto);
+    return this.eventsService.adminApprove(actor, id);
   }
 
   @Post(':id/admin/decline')
@@ -266,7 +259,7 @@ export class EventsController {
   @ApiNotFoundResponse({ description: 'Event not found' })
   @ApiConflictResponse({
     description:
-      'Event is not on admin moderation, or (teacher event) its deadline, a month after creation, has passed',
+      'Event is not on admin moderation, or its deadline (3 days before startsAt) has passed',
   })
   adminDecline(
     @CurrentUser() actor: User,
@@ -377,7 +370,7 @@ export class EventsController {
   @ApiOperation({
     summary: 'Vote for an event',
     description:
-      "Pupil only. The event must be ON_VOTE and voting must be open (until votingClosesAt: 3 days before startsAt of a pupil event, a month after creation of a teacher event, startsAt of an admin event). One vote per pupil per event. Audience by scope, relative to the initiator's class: CLASS - same class, GRADE - same grade (first number of the class name), SCHOOL - any pupil. The vote that reaches voteThreshold moves the event to ON_ADMIN_MODERATION, or an admin event to FINALIZED.",
+      "Pupil only. The event must be ON_VOTE and voting must be open (until votingClosesAt: 3 days before startsAt). One vote per pupil per event. Audience by scope, relative to the initiator's class: CLASS - same class, GRADE - same grade (first number of the class name), SCHOOL - any pupil. The vote that reaches voteThreshold moves the event to ON_ADMIN_MODERATION, or an admin event to FINALIZED.",
   })
   @ApiUuidParam()
   @ApiOkResponse({ type: EventVoteResponseDto })

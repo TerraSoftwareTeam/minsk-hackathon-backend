@@ -21,7 +21,6 @@ import { DeclineEventDto } from './dto/decline-event.dto';
 import { EventResponseDto } from './dto/event-response.dto';
 import { EventVoteResponseDto } from './dto/event-vote-response.dto';
 import { VotingEventResponseDto } from './dto/voting-event-response.dto';
-import { AdminApproveEventDto } from './dto/admin-approve-event.dto';
 import {
   DeadlineFields,
   PENDING_STATUSES,
@@ -71,9 +70,12 @@ const withVoteState = (userId: string) =>
     likes: { where: { userId }, select: { userId: true } },
   }) as const;
 
-type VotingLock = { status: EventStatuses; voteThreshold: number; initiatorId: string } & DeadlineFields;
-
-type ModerationDecision = { status: DecisionStatus; declineReason?: string | null; startsAt?: Date };
+type VotingLock = {
+  status: EventStatuses;
+  voteThreshold: number;
+  initiatorId: string;
+  createdByRole: UserRoles;
+} & DeadlineFields;
 
 type ModerationStage = {
   from: PendingStatus;
@@ -86,16 +88,14 @@ const TEACHER_MODERATION: ModerationStage = {
   from: EventStatuses.ON_MODERATION,
   mayModerate: (actor, event) => isTeacherOfClass(actor, event.initiator.class),
   forbiddenMessage: "Only a teacher of the author's class can moderate this event",
-  // Only pupil events are on teacher moderation, and it has no deadline: never thrown.
-  lateMessage: 'Too late to moderate: the event is past its deadline',
+  lateMessage: 'Too late to moderate: an event must be decided 3 days before it starts',
 };
 
 const ADMIN_MODERATION: ModerationStage = {
   from: EventStatuses.ON_ADMIN_MODERATION,
   mayModerate: (actor) => actor.role === UserRoles.ADMIN,
   forbiddenMessage: 'Only an admin can moderate this event',
-  // Pupil events have no deadline on admin moderation; teacher events do.
-  lateMessage: 'Too late to moderate: the event was not decided within a month of its creation',
+  lateMessage: 'Too late to moderate: an event must be decided 3 days before it starts',
 };
 
 @Injectable()
@@ -136,12 +136,19 @@ export class EventsService {
   private creationFlow(
     actor: User,
     dto: CreateEventDto,
-  ): { status: EventStatuses; scope?: Scopes; startsAt?: Date } {
+  ): { status: EventStatuses; scope?: Scopes; startsAt: Date } {
+    // The author's date is final: nobody changes it, moderators only approve or decline.
+    if (!dto.startsAt) {
+      throw new BadRequestException('startsAt is required: the author chooses the date on creation');
+    }
+    const startsAt = new Date(dto.startsAt);
+    if (startsAt.getTime() <= Date.now()) {
+      throw new BadRequestException('startsAt must be in the future');
+    }
     if (actor.role === UserRoles.ADMIN) {
       if (dto.scope !== undefined && dto.scope !== Scopes.SCHOOL) {
         throw new BadRequestException('An admin event is a school event: its scope can only be SCHOOL');
       }
-      const startsAt = futureStartsAt(dto.startsAt, 'An admin sets the date of a school event on creation');
       return { status: EventStatuses.ON_VOTE, scope: Scopes.SCHOOL, startsAt };
     }
 
@@ -150,20 +157,12 @@ export class EventsService {
         `voteThreshold must be at least ${MIN_PUPIL_VOTE_THRESHOLD}: the organizer is already a participant`,
       );
     }
-    if (actor.role === UserRoles.TEACHER && dto.startsAt !== undefined) {
-      throw new BadRequestException(
-        'A teacher does not set the date on creation; it is set by the admin who approves the event',
-      );
-    }
     if (!actor.class) {
       throw new BadRequestException(`${actor.role === UserRoles.TEACHER ? 'Teacher' : 'Pupil'} has no class assigned`);
     }
-    if (actor.role === UserRoles.TEACHER) {
-      return { status: EventStatuses.ON_VOTE, scope: dto.scope };
-    }
-    // The pupil's date is final: nobody changes it, the admin can only approve or decline.
-    const startsAt = futureStartsAt(dto.startsAt, 'A pupil chooses the date of the event on creation');
-    return { status: EventStatuses.ON_MODERATION, scope: dto.scope, startsAt };
+    const status =
+      actor.role === UserRoles.TEACHER ? EventStatuses.ON_VOTE : EventStatuses.ON_MODERATION;
+    return { status, scope: dto.scope, startsAt };
   }
 
   async previewProbability(category: EventCategories, startsAt: Date | null): Promise<number> {
@@ -264,19 +263,8 @@ export class EventsService {
     });
   }
 
-  adminApprove(actor: User, id: string, dto: AdminApproveEventDto): Promise<EventResponseDto> {
-    return this.moderate(ADMIN_MODERATION, actor, id, (event) => {
-      if (event.createdByRole === UserRoles.TEACHER) {
-        const startsAt = futureStartsAt(dto.startsAt, 'The admin sets the date of a teacher event on approval');
-        return { status: EventStatuses.FINALIZED, startsAt };
-      }
-      if (dto.startsAt !== undefined) {
-        throw new BadRequestException(
-          'The pupil chose the date of this event on creation and it cannot be changed: approve without startsAt, or decline',
-        );
-      }
-      return { status: EventStatuses.FINALIZED };
-    });
+  adminApprove(actor: User, id: string): Promise<EventResponseDto> {
+    return this.moderate(ADMIN_MODERATION, actor, id, { status: EventStatuses.FINALIZED });
   }
 
   adminDecline(actor: User, id: string, dto: DeclineEventDto): Promise<EventResponseDto> {
@@ -637,13 +625,7 @@ export class EventsService {
       throw new ConflictException(`Event is not on vote, its status is ${event.status}`);
     }
     if (isPastDeadline(event)) {
-      throw new ConflictException(
-        {
-          [UserRoles.ADMIN]: 'Voting is closed: it closes when the event starts',
-          [UserRoles.PUPIL]: 'Voting is closed: it closes 3 days before the event starts',
-          [UserRoles.TEACHER]: 'Voting is closed: it closes a month after the event was created',
-        }[event.createdByRole],
-      );
+      throw new ConflictException('Voting is closed: it closes 3 days before the event starts');
     }
   }
 
@@ -711,7 +693,7 @@ export class EventsService {
     stage: ModerationStage,
     actor: User,
     id: string,
-    decision: ModerationDecision | ((event: EventWithUsers) => ModerationDecision),
+    data: { status: DecisionStatus; declineReason?: string | null },
   ): Promise<EventResponseDto> {
     const event = await this.findEventOrThrow(id);
     if (!stage.mayModerate(actor, event)) {
@@ -723,7 +705,6 @@ export class EventsService {
     if (isPastDeadline(event)) {
       throw new ConflictException(stage.lateMessage);
     }
-    const data = typeof decision === 'function' ? decision(event) : decision;
 
     const award = await this.prisma.$transaction(async (tx) => {
       const { count } = await tx.event.updateMany({
@@ -736,9 +717,8 @@ export class EventsService {
       return data.status === EventStatuses.FINALIZED ? awardFinalizedExp(tx, id) : null;
     });
     this.notifier.decisionMade(event, data.status, data.declineReason ?? null, award?.organizerExp ?? 0);
-    const startsAt = data.startsAt ?? event.startsAt;
-    if (award && startsAt) {
-      this.notifier.participantsFinalized({ id, name: event.name, startsAt }, award.participantIds);
+    if (award && event.startsAt) {
+      this.notifier.participantsFinalized({ id, name: event.name, startsAt: event.startsAt }, award.participantIds);
     }
     return this.toResponse(await this.findEventOrThrow(id));
   }
@@ -761,18 +741,6 @@ export class EventsService {
       throw error;
     }
   }
-}
-
-/** The date given on creation or on approval: required, in the future. */
-function futureStartsAt(value: string | undefined, who: string): Date {
-  if (!value) {
-    throw new BadRequestException(`${who}: startsAt is required`);
-  }
-  const startsAt = new Date(value);
-  if (startsAt.getTime() <= Date.now()) {
-    throw new BadRequestException('startsAt must be in the future');
-  }
-  return startsAt;
 }
 
 function isTeacherOfClass(actor: User, className: string | null): boolean {
