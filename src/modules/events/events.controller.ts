@@ -24,6 +24,7 @@ import {
   ApiConsumes,
   ApiCreatedResponse,
   ApiForbiddenResponse,
+  ApiNoContentResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
@@ -266,6 +267,29 @@ export class EventsController {
     @Body() dto: DeclineEventDto,
   ): Promise<EventResponseDto> {
     return this.eventsService.adminDecline(actor, id, dto);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Delete an event',
+    description:
+      "Deletes the event for good, with its votes, likes and image. The author, or a teacher of the pupil author's class: only while the event is pending (ON_MODERATION, ON_VOTE, ON_ADMIN_MODERATION) and not past its deadline. An admin: any event in any status. When a teacher or an admin deletes it, the author gets an EVENT_DELETED push.",
+  })
+  @ApiUuidParam()
+  @ApiNoContentResponse({ description: 'Deleted' })
+  @ApiForbiddenResponse({
+    description: "Caller is not the author, a teacher of the pupil author's class or an admin",
+  })
+  @ApiNotFoundResponse({ description: 'Event not found' })
+  @ApiConflictResponse({
+    description: 'Author or teacher: the event is already decided (or past its deadline)',
+  })
+  remove(
+    @CurrentUser() actor: User,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<void> {
+    return this.eventsService.remove(actor, id);
   }
 
   @Put(':id/image')

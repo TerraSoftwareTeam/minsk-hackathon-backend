@@ -226,6 +226,19 @@ describe('EventModerationNotifier', () => {
     });
   });
 
+  it.each([
+    [UserRoles.TEACHER, 'Учитель удалил «Trip»'],
+    [UserRoles.ADMIN, 'Администрация удалила «Trip»'],
+  ])('tells the author that a %s deleted the event', async (role, body) => {
+    notifier.eventDeleted({ id: 'event-1', name: 'Trip', initiatorId: 'pupil-1' }, role);
+    await flush();
+    expect(push.sendToUsers).toHaveBeenCalledWith(['pupil-1'], {
+      title: 'Заявка удалена',
+      body,
+      data: { type: MODERATION_PUSH_TYPES.DELETED, eventId: 'event-1' },
+    });
+  });
+
   it('swallows a failure instead of rejecting', async () => {
     prisma.user.findMany.mockRejectedValue(new Error('db down'));
     expect(() => notifier.awaitsAdmin('event-1')).not.toThrow();

@@ -106,11 +106,12 @@ describe('EventsService', () => {
     finalizedByVotes: jest.Mock;
     decisionMade: jest.Mock;
     participantsFinalized: jest.Mock;
+    eventDeleted: jest.Mock;
   };
   let tx: {
     $queryRaw: jest.Mock;
     eventVote: { create: jest.Mock; count: jest.Mock; deleteMany: jest.Mock };
-    event: { update: jest.Mock; updateMany: jest.Mock; findUniqueOrThrow: jest.Mock };
+    event: { update: jest.Mock; updateMany: jest.Mock; findUniqueOrThrow: jest.Mock; delete: jest.Mock };
     user: { update: jest.Mock; updateMany: jest.Mock };
   };
 
@@ -154,6 +155,7 @@ describe('EventsService', () => {
       },
       event: {
         update: jest.fn().mockResolvedValue({}),
+        delete: jest.fn().mockResolvedValue({}),
         // Moderation updates the status in a transaction: the same mock as outside it.
         updateMany: prisma.event.updateMany,
         // Who gets exp when the event is FINALIZED: the pupil author voted too.
@@ -178,6 +180,7 @@ describe('EventsService', () => {
       finalizedByVotes: jest.fn(),
       decisionMade: jest.fn(),
       participantsFinalized: jest.fn(),
+      eventDeleted: jest.fn(),
     };
     service = new EventsService(
       prisma as unknown as PrismaService,
@@ -1366,6 +1369,115 @@ describe('EventsService', () => {
       images.deleteImage.mockRejectedValue(new Error('cloudinary down'));
 
       await expect(service.setImage(pupil, 'event-1', upload)).resolves.toBeDefined();
+    });
+  });
+
+  describe('remove', () => {
+    const lockedRow = (over: Partial<{ status: EventStatuses; createdAt: Date; imageId: string | null }> = {}) => [
+      { status: EventStatuses.ON_MODERATION, createdByRole: UserRoles.PUPIL, createdAt: RECENT, startsAt: null, imageId: null, ...over },
+    ];
+    const pending = [EventStatuses.ON_MODERATION, EventStatuses.ON_VOTE, EventStatuses.ON_ADMIN_MODERATION];
+    const decided = [EventStatuses.FINALIZED, EventStatuses.DECLINED, EventStatuses.DECLINED_BY_ADMIN, EventStatuses.EXPIRED];
+
+    it.each(pending)('the author deletes the event while it is %s, nobody is pushed', async (status) => {
+      prisma.event.findUnique.mockResolvedValue(storedEvent({ status }));
+      tx.$queryRaw.mockResolvedValue(lockedRow({ status }));
+
+      await expect(service.remove(pupil, 'event-1')).resolves.toBeUndefined();
+
+      expect(tx.event.delete).toHaveBeenCalledWith({ where: { id: 'event-1' } });
+      expect(images.deleteImage).not.toHaveBeenCalled();
+      expect(notifier.eventDeleted).not.toHaveBeenCalled();
+    });
+
+    it('the image of the deleted event is discarded', async () => {
+      prisma.event.findUnique.mockResolvedValue(storedEvent({ imageId: 'img-old' }));
+      tx.$queryRaw.mockResolvedValue(lockedRow({ imageId: 'img-old' }));
+
+      await service.remove(pupil, 'event-1');
+
+      expect(images.deleteImage).toHaveBeenCalledWith('img-old');
+    });
+
+    it.each([
+      ['a teacher of the class', teacher],
+      ['another teacher of the class', coTeacher],
+    ])("%s deletes a pupil's pending event, the author is pushed", async (_name, actor) => {
+      tx.$queryRaw.mockResolvedValue(lockedRow());
+
+      await service.remove(actor, 'event-1');
+
+      expect(tx.event.delete).toHaveBeenCalled();
+      expect(notifier.eventDeleted).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'event-1', name: 'Trip', initiatorId: pupil.id }),
+        UserRoles.TEACHER,
+      );
+    });
+
+    it.each([...pending, ...decided])('an admin deletes the event even when it is %s', async (status) => {
+      prisma.event.findUnique.mockResolvedValue(storedEvent({ status, createdAt: OVERDUE }));
+      tx.$queryRaw.mockResolvedValue(lockedRow({ status, createdAt: OVERDUE }));
+
+      await service.remove(admin, 'event-1');
+
+      expect(tx.event.delete).toHaveBeenCalled();
+      expect(notifier.eventDeleted).toHaveBeenCalledWith(
+        expect.objectContaining({ initiatorId: pupil.id }),
+        UserRoles.ADMIN,
+      );
+    });
+
+    it('an admin deleting their own event is not pushed', async () => {
+      prisma.event.findUnique.mockResolvedValue(
+        storedEvent({ initiatorId: admin.id, initiator: admin, createdByRole: UserRoles.ADMIN, status: EventStatuses.ON_VOTE, startsAt: FUTURE }),
+      );
+      tx.$queryRaw.mockResolvedValue(lockedRow({ status: EventStatuses.ON_VOTE }));
+
+      await service.remove(admin, 'event-1');
+
+      expect(tx.event.delete).toHaveBeenCalled();
+      expect(notifier.eventDeleted).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['a classmate', otherPupil],
+      ['a teacher of another class', otherTeacher],
+    ])('Forbidden for %s, nothing deleted', async (_name, actor) => {
+      await expect(service.remove(actor, 'event-1')).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it("Forbidden for a teacher of the class to delete another teacher's event", async () => {
+      prisma.event.findUnique.mockResolvedValue(
+        storedEvent({ initiatorId: teacher.id, initiator: teacher, createdByRole: UserRoles.TEACHER, status: EventStatuses.ON_VOTE }),
+      );
+      await expect(service.remove(coTeacher, 'event-1')).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(service.remove(teacher, 'event-1')).resolves.toBeUndefined();
+    });
+
+    it.each(decided)('Conflict for the author once the event is %s, nothing deleted', async (status) => {
+      prisma.event.findUnique.mockResolvedValue(storedEvent({ status }));
+      await expect(service.remove(pupil, 'event-1')).rejects.toBeInstanceOf(ConflictException);
+      await expect(service.remove(teacher, 'event-1')).rejects.toBeInstanceOf(ConflictException);
+      expect(tx.event.delete).not.toHaveBeenCalled();
+    });
+
+    it('Conflict for the author past the deadline, nothing deleted', async () => {
+      prisma.event.findUnique.mockResolvedValue(storedEvent({ createdAt: OVERDUE }));
+      await expect(service.remove(pupil, 'event-1')).rejects.toBeInstanceOf(ConflictException);
+      expect(tx.event.delete).not.toHaveBeenCalled();
+    });
+
+    it('Conflict, nothing deleted, when the event was decided after the pre-check', async () => {
+      tx.$queryRaw.mockResolvedValue(lockedRow({ status: EventStatuses.FINALIZED }));
+      await expect(service.remove(pupil, 'event-1')).rejects.toBeInstanceOf(ConflictException);
+      expect(tx.event.delete).not.toHaveBeenCalled();
+      expect(notifier.eventDeleted).not.toHaveBeenCalled();
+    });
+
+    it('404 for a missing event', async () => {
+      prisma.event.findUnique.mockResolvedValue(null);
+      await expect(service.remove(admin, 'missing')).rejects.toBeInstanceOf(NotFoundException);
     });
   });
 

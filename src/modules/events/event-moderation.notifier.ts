@@ -12,6 +12,8 @@ export const MODERATION_PUSH_TYPES = {
   FINALIZED_BY_VOTES: 'EVENT_FINALIZED_BY_VOTES',
   /** To the participants (voters) of an event that takes place. */
   FINALIZED: 'EVENT_FINALIZED',
+  /** To the author whose event was deleted by a teacher or an admin. */
+  DELETED: 'EVENT_DELETED',
 } as const;
 
 export type DecisionStatus = 'ON_VOTE' | 'DECLINED' | 'FINALIZED' | 'DECLINED_BY_ADMIN';
@@ -188,6 +190,21 @@ export class EventModerationNotifier {
     }
     this.run(() =>
       this.push.sendToUsers([event.initiatorId], { title: text.title, body, data }),
+    );
+  }
+
+  /** Someone else (a teacher of the class or an admin) deleted the author's event. */
+  eventDeleted(event: { id: string; name: string; initiatorId: string }, deletedBy: UserRoles): void {
+    const body =
+      deletedBy === UserRoles.ADMIN
+        ? `Администрация удалила «${event.name}»`
+        : `Учитель удалил «${event.name}»`;
+    this.run(() =>
+      this.push.sendToUsers([event.initiatorId], {
+        title: 'Заявка удалена',
+        body,
+        data: { type: MODERATION_PUSH_TYPES.DELETED, eventId: event.id },
+      }),
     );
   }
 

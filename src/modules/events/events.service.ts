@@ -377,7 +377,7 @@ export class EventsService {
     let previousImageId: string | null;
     try {
       previousImageId = await this.prisma.$transaction(async (tx) => {
-        const locked = await this.lockForImage(tx, id);
+        const locked = await this.lockForChange(tx, id);
         this.assertImageEditable(locked);
         await tx.event.update({ where: { id }, data: { imageId: image.id } });
         return locked.imageId;
@@ -403,7 +403,7 @@ export class EventsService {
     }
 
     const removedImageId = await this.prisma.$transaction(async (tx) => {
-      const locked = await this.lockForImage(tx, id);
+      const locked = await this.lockForChange(tx, id);
       if (!isAdmin) {
         this.assertImageEditable(locked);
       }
@@ -416,6 +416,56 @@ export class EventsService {
       await this.discardImage(removedImageId);
     }
     return this.toResponse(await this.findEventOrThrow(id));
+  }
+
+  /**
+   * Deletes the event for good (its votes and likes cascade, its image is discarded).
+   * The author, or a teacher of the pupil author's class: only while the event is
+   * pending and not past its deadline. An admin: any event in any status (the exp
+   * already awarded for a FINALIZED event stays). The author is pushed when someone
+   * else deleted it.
+   */
+  async remove(actor: User, id: string): Promise<void> {
+    const event = await this.findEventOrThrow(id);
+    const isAdmin = actor.role === UserRoles.ADMIN;
+    if (!isAdmin && !this.mayDelete(actor, event)) {
+      throw new ForbiddenException(
+        "Only the author, a teacher of the author's class or an admin can delete this event",
+      );
+    }
+    if (!isAdmin) {
+      this.assertDeletable(event);
+    }
+
+    const removedImageId = await this.prisma.$transaction(async (tx) => {
+      const locked = await this.lockForChange(tx, id);
+      if (!isAdmin) {
+        this.assertDeletable(locked);
+      }
+      await tx.event.delete({ where: { id } });
+      return locked.imageId;
+    });
+    if (removedImageId) {
+      await this.discardImage(removedImageId);
+    }
+    if (actor.id !== event.initiatorId) {
+      this.notifier.eventDeleted(event, actor.role);
+    }
+  }
+
+  private mayDelete(actor: User, event: EventWithUsers): boolean {
+    return (
+      actor.id === event.initiatorId ||
+      (event.createdByRole === UserRoles.PUPIL && isTeacherOfClass(actor, event.initiator.class))
+    );
+  }
+
+  private assertDeletable(event: { status: EventStatuses } & DeadlineFields): void {
+    if (!isPending(event.status) || isPastDeadline(event)) {
+      throw new ConflictException(
+        `The event can be deleted only until it is decided, its status is ${event.status}`,
+      );
+    }
   }
 
   async expireOverdue(now: Date = new Date()): Promise<number> {
@@ -530,7 +580,7 @@ export class EventsService {
     }
   }
 
-  private async lockForImage(
+  private async lockForChange(
     tx: Prisma.TransactionClient,
     id: string,
   ): Promise<{ status: EventStatuses; imageId: string | null } & DeadlineFields> {
