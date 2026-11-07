@@ -104,7 +104,7 @@ describe('EventsService', () => {
       updateMany: jest.Mock;
     };
     eventVote: { create: jest.Mock; count: jest.Mock };
-    eventLike: { groupBy: jest.Mock; createMany: jest.Mock; deleteMany: jest.Mock; count: jest.Mock };
+    eventLike: { groupBy: jest.Mock; upsert: jest.Mock; deleteMany: jest.Mock; aggregate: jest.Mock };
     $transaction: jest.Mock;
   };
   let images: { uploadImage: jest.Mock; deleteImage: jest.Mock };
@@ -146,9 +146,9 @@ describe('EventsService', () => {
       },
       eventLike: {
         groupBy: jest.fn().mockResolvedValue([]),
-        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+        upsert: jest.fn().mockResolvedValue({}),
         deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
-        count: jest.fn().mockResolvedValue(0),
+        aggregate: jest.fn().mockResolvedValue({ _sum: { value: 0 } }),
       },
       $transaction: jest.fn((fn: (client: typeof tx) => unknown) => fn(tx)),
     };
@@ -686,7 +686,7 @@ describe('EventsService', () => {
         },
         {
           ...storedEvent({ id: 'e1', status: EventStatuses.ON_VOTE, votes: voters(4, pupil) }),
-          likes: [{ userId: pupil.id }],
+          likes: [{ userId: pupil.id, value: 1 }],
         },
       ]);
 
@@ -696,7 +696,7 @@ describe('EventsService', () => {
         where: { initiatorId: pupil.id },
         include: {
           ...WITH_USERS_INCLUDE,
-          likes: { where: { userId: pupil.id }, select: { userId: true } },
+          likes: { where: { userId: pupil.id }, select: { userId: true, value: true } },
         },
         orderBy: { createdAt: 'desc' },
       });
@@ -736,7 +736,7 @@ describe('EventsService', () => {
         initiator: { ...otherPupil, class: initiatorClass },
         votes: voters(over.votesCount ?? 0, over.votedByMe ? pupil : undefined),
       }),
-      likes: over.liked ? [{ userId: pupil.id }] : [],
+      likes: over.liked ? [{ userId: pupil.id, value: 1 }] : [],
     });
 
     it('queries ON_VOTE events of the pupil scope with their vote state, newest first', async () => {
@@ -760,7 +760,7 @@ describe('EventsService', () => {
         },
         include: {
           ...WITH_USERS_INCLUDE,
-          likes: { where: { userId: pupil.id }, select: { userId: true } },
+          likes: { where: { userId: pupil.id }, select: { userId: true, value: true } },
         },
         orderBy: { createdAt: 'desc' },
       });
@@ -1792,20 +1792,44 @@ describe('EventsService', () => {
   describe('likes', () => {
     beforeEach(() => {
       prisma.event.findUnique.mockResolvedValue({ status: EventStatuses.ON_VOTE });
-      prisma.eventLike.count.mockResolvedValue(3);
-      prisma.eventLike.groupBy.mockResolvedValue([{ eventId: 'event-1', _count: { _all: 3 } }]);
+      prisma.eventLike.aggregate.mockResolvedValue({ _sum: { value: 3 } });
+      prisma.eventLike.groupBy.mockResolvedValue([{ eventId: 'event-1', _sum: { value: 3 } }]);
     });
 
     it('a pupil likes an ON_VOTE event: +1, a repeat is a no-op', async () => {
       const result = await service.like(otherPupil, 'event-1');
 
       expect(prisma.event.findUnique).toHaveBeenCalledWith({ where: { id: 'event-1' }, select: { status: true } });
-      expect(prisma.eventLike.createMany).toHaveBeenCalledWith({
-        data: [{ eventId: 'event-1', userId: otherPupil.id }],
-        skipDuplicates: true,
+      expect(prisma.eventLike.upsert).toHaveBeenCalledWith({
+        where: { eventId_userId: { eventId: 'event-1', userId: otherPupil.id } },
+        create: { eventId: 'event-1', userId: otherPupil.id, value: 1 },
+        update: { value: 1 },
       });
-      expect(prisma.eventLike.count).toHaveBeenCalledWith({ where: { eventId: 'event-1' } });
-      expect(result).toEqual({ eventId: 'event-1', liked: true, likesCount: 3 });
+      expect(prisma.eventLike.aggregate).toHaveBeenCalledWith({
+        where: { eventId: 'event-1' },
+        _sum: { value: true },
+      });
+      expect(result).toEqual({ eventId: 'event-1', liked: true, disliked: false, likesCount: 3 });
+    });
+
+    it('a pupil dislikes an event: -1, switching a like to a dislike', async () => {
+      prisma.eventLike.aggregate.mockResolvedValue({ _sum: { value: -1 } });
+
+      const result = await service.dislike(otherPupil, 'event-1');
+
+      expect(prisma.eventLike.upsert).toHaveBeenCalledWith({
+        where: { eventId_userId: { eventId: 'event-1', userId: otherPupil.id } },
+        create: { eventId: 'event-1', userId: otherPupil.id, value: -1 },
+        update: { value: -1 },
+      });
+      expect(result).toEqual({ eventId: 'event-1', liked: false, disliked: true, likesCount: -1 });
+    });
+
+    it('a teacher cannot dislike; a dislike of a pending event is a Conflict', async () => {
+      await expect(service.dislike(teacher, 'event-1')).rejects.toBeInstanceOf(ForbiddenException);
+      prisma.event.findUnique.mockResolvedValue({ status: EventStatuses.ON_MODERATION });
+      await expect(service.dislike(otherPupil, 'event-1')).rejects.toBeInstanceOf(ConflictException);
+      expect(prisma.eventLike.upsert).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -1827,7 +1851,7 @@ describe('EventsService', () => {
     it.each([['teacher', teacher], ['admin', admin]])('%s cannot like or unlike', async (_name, actor) => {
       await expect(service.like(actor, 'event-1')).rejects.toBeInstanceOf(ForbiddenException);
       await expect(service.unlike(actor, 'event-1')).rejects.toBeInstanceOf(ForbiddenException);
-      expect(prisma.eventLike.createMany).not.toHaveBeenCalled();
+      expect(prisma.eventLike.upsert).not.toHaveBeenCalled();
       expect(prisma.eventLike.deleteMany).not.toHaveBeenCalled();
     });
 
@@ -1836,7 +1860,7 @@ describe('EventsService', () => {
       async (status) => {
         prisma.event.findUnique.mockResolvedValue({ status });
         await expect(service.like(otherPupil, 'event-1')).rejects.toBeInstanceOf(ConflictException);
-        expect(prisma.eventLike.createMany).not.toHaveBeenCalled();
+        expect(prisma.eventLike.upsert).not.toHaveBeenCalled();
       },
     );
 
@@ -1848,14 +1872,14 @@ describe('EventsService', () => {
 
     it('unlike takes the own like back: -1, in any status', async () => {
       prisma.event.findUnique.mockResolvedValue({ id: 'event-1' });
-      prisma.eventLike.count.mockResolvedValue(2);
+      prisma.eventLike.aggregate.mockResolvedValue({ _sum: { value: 2 } });
 
       const result = await service.unlike(otherPupil, 'event-1');
 
       expect(prisma.eventLike.deleteMany).toHaveBeenCalledWith({
         where: { eventId: 'event-1', userId: otherPupil.id },
       });
-      expect(result).toEqual({ eventId: 'event-1', liked: false, likesCount: 2 });
+      expect(result).toEqual({ eventId: 'event-1', liked: false, disliked: false, likesCount: 2 });
     });
 
     it('every event response carries its like count', async () => {
@@ -1864,7 +1888,7 @@ describe('EventsService', () => {
       expect(prisma.eventLike.groupBy).toHaveBeenCalledWith({
         by: ['eventId'],
         where: { eventId: { in: ['event-1'] } },
-        _count: { _all: true },
+        _sum: { value: true },
       });
       expect(result.likesCount).toBe(3);
       expect(result).not.toHaveProperty('ratingAverage');

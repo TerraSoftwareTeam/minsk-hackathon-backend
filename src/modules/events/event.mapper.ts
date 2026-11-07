@@ -51,7 +51,7 @@ export function toEventResponse(
 }
 
 export type VotingEvent = EventWithUsers & {
-  likes: { userId: string }[];
+  likes: { userId: string; value: number }[];
 };
 
 export function toVotingEventResponse(
@@ -61,6 +61,7 @@ export function toVotingEventResponse(
 ): VotingEventResponseDto {
   return Object.assign(toEventResponse(event, computed), {
     hasVoted: event.votes.some((vote) => vote.voter.id === viewerId),
-    likedByMe: event.likes.length > 0,
+    likedByMe: event.likes.some((like) => like.value > 0),
+    dislikedByMe: event.likes.some((like) => like.value < 0),
   });
 }

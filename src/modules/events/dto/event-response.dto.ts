@@ -124,7 +124,7 @@ export class EventResponseDto {
   @ApiProperty({
     type: 'integer',
     example: 12,
-    description: 'Number of likes. Any pupil may like an event from ON_VOTE on, once, and take the like back',
+    description: 'Likes minus dislikes (a like is +1, a dislike is -1). Any pupil may react to an event from ON_VOTE on, once, switch it or take it back',
   })
   likesCount!: number;
 

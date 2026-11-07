@@ -418,7 +418,7 @@ export class EventsController {
     description:
       'Pupil only, any pupil: the event scope does not limit who likes. ' +
       'The event must be approved by the teacher: ON_VOTE, ON_ADMIN_MODERATION, FINALIZED or DECLINED_BY_ADMIN. ' +
-      'One like per pupil per event: liking again changes nothing.',
+      'One reaction per pupil per event: liking again changes nothing, liking after a dislike switches it (-1 to +1).',
   })
   @ApiUuidParam()
   @ApiOkResponse({ type: EventLikeResponseDto })
@@ -432,11 +432,31 @@ export class EventsController {
     return this.eventsService.like(actor, id);
   }
 
+  @Put(':id/dislike')
+  @ApiOperation({
+    summary: 'Dislike an event (-1)',
+    description:
+      'Same rules as the like: pupil only, the event must be approved by the teacher. ' +
+      'One reaction per pupil per event: disliking again changes nothing, disliking after a like switches it (+1 to -1). ' +
+      'The dislike counts -1 in likesCount.',
+  })
+  @ApiUuidParam()
+  @ApiOkResponse({ type: EventLikeResponseDto })
+  @ApiForbiddenResponse({ description: 'Caller is not a pupil' })
+  @ApiNotFoundResponse({ description: 'Event not found' })
+  @ApiConflictResponse({ description: 'Event is ON_MODERATION, DECLINED or EXPIRED' })
+  dislike(
+    @CurrentUser() actor: User,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<EventLikeResponseDto> {
+    return this.eventsService.dislike(actor, id);
+  }
+
   @Delete(':id/like')
   @ApiOperation({
-    summary: 'Take the like back (-1)',
+    summary: 'Take the like or dislike back',
     description:
-      'Pupil only, in any status of the event. Does nothing if the caller has not liked it.',
+      'Pupil only, in any status of the event. Removes the caller\'s like (-1) or dislike (+1). Does nothing if there is none.',
   })
   @ApiUuidParam()
   @ApiOkResponse({ type: EventLikeResponseDto })

@@ -1,10 +1,14 @@
-/// A pupil's like of an event: one per pupil per event, the pupil can take it back.
+/// A pupil's like (value 1) or dislike (value -1) of an event: one reaction per pupil per event,
+/// the pupil can switch it or take it back.
 model EventLike {
   event   Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
   eventId String
 
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId String
+
+  /// 1 for a like, -1 for a dislike.
+  value Int @default(1)
 
   createdAt DateTime @default(now())
 

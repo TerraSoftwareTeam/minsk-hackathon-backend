@@ -4,9 +4,12 @@ export class EventLikeResponseDto {
   @ApiProperty({ example: '3f2c9a4e-1b7d-4e8a-9c0f-2a6b5d7e8f90', format: 'uuid' })
   eventId!: string;
 
-  @ApiProperty({ example: true, description: 'true after PUT (like), false after DELETE (unlike)' })
+  @ApiProperty({ example: true, description: 'true after PUT like, false after PUT dislike or DELETE' })
   liked!: boolean;
 
-  @ApiProperty({ type: 'integer', example: 12, description: 'Number of likes of the event' })
+  @ApiProperty({ example: false, description: 'true after PUT dislike' })
+  disliked!: boolean;
+
+  @ApiProperty({ type: 'integer', example: 12, description: 'Likes minus dislikes of the event' })
   likesCount!: number;
 }

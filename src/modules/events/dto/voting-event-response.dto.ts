@@ -10,7 +10,13 @@ export class VotingEventResponseDto extends EventResponseDto {
 
   @ApiProperty({
     example: false,
-    description: 'Whether the caller has liked the event (the count is likesCount)',
+    description: 'Whether the caller has liked the event (+1 in likesCount)',
   })
   likedByMe!: boolean;
+
+  @ApiProperty({
+    example: false,
+    description: 'Whether the caller has disliked the event (it counts -1 in likesCount)',
+  })
+  dislikedByMe!: boolean;
 }

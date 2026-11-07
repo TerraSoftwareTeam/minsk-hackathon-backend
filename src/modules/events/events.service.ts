@@ -67,7 +67,7 @@ const WITH_USERS = {
 const withVoteState = (userId: string) =>
   ({
     ...WITH_USERS,
-    likes: { where: { userId }, select: { userId: true } },
+    likes: { where: { userId }, select: { userId: true, value: true } },
   }) as const;
 
 type VotingLock = {
@@ -357,8 +357,16 @@ export class EventsService {
   }
 
   async like(actor: User, id: string): Promise<EventLikeResponseDto> {
+    return this.react(actor, id, 1);
+  }
+
+  async dislike(actor: User, id: string): Promise<EventLikeResponseDto> {
+    return this.react(actor, id, -1);
+  }
+
+  private async react(actor: User, id: string, value: 1 | -1): Promise<EventLikeResponseDto> {
     if (actor.role !== UserRoles.PUPIL) {
-      throw new ForbiddenException('Only a pupil can like an event');
+      throw new ForbiddenException('Only a pupil can like or dislike an event');
     }
     const event = await this.prisma.event.findUnique({ where: { id }, select: { status: true } });
     if (!event) {
@@ -366,30 +374,47 @@ export class EventsService {
     }
     if (!(LIKABLE_STATUSES as readonly EventStatuses[]).includes(event.status)) {
       throw new ConflictException(
-        `The event can be liked once the teacher has approved it, its status is ${event.status}`,
+        `The event can be liked or disliked once the teacher has approved it, its status is ${event.status}`,
       );
     }
-    await this.prisma.eventLike.createMany({
-      data: [{ eventId: id, userId: actor.id }],
-      skipDuplicates: true,
+    await this.prisma.eventLike.upsert({
+      where: { eventId_userId: { eventId: id, userId: actor.id } },
+      create: { eventId: id, userId: actor.id, value },
+      update: { value },
     });
-    return { eventId: id, liked: true, likesCount: await this.countLikes(id) };
+    return {
+      eventId: id,
+      liked: value === 1,
+      disliked: value === -1,
+      likesCount: await this.countLikes(id),
+    };
   }
 
+  /** Takes back the caller's like or dislike, whichever it is. */
   async unlike(actor: User, id: string): Promise<EventLikeResponseDto> {
     if (actor.role !== UserRoles.PUPIL) {
-      throw new ForbiddenException('Only a pupil can like an event');
+      throw new ForbiddenException('Only a pupil can like or dislike an event');
     }
     const event = await this.prisma.event.findUnique({ where: { id }, select: { id: true } });
     if (!event) {
       throw new NotFoundException('Event not found');
     }
     await this.prisma.eventLike.deleteMany({ where: { eventId: id, userId: actor.id } });
-    return { eventId: id, liked: false, likesCount: await this.countLikes(id) };
+    return {
+      eventId: id,
+      liked: false,
+      disliked: false,
+      likesCount: await this.countLikes(id),
+    };
   }
 
-  private countLikes(eventId: string): Promise<number> {
-    return this.prisma.eventLike.count({ where: { eventId } });
+  /** Likes minus dislikes. */
+  private async countLikes(eventId: string): Promise<number> {
+    const { _sum } = await this.prisma.eventLike.aggregate({
+      where: { eventId },
+      _sum: { value: true },
+    });
+    return _sum.value ?? 0;
   }
 
   async setImage(actor: User, id: string, file: Express.Multer.File): Promise<EventResponseDto> {
@@ -616,9 +641,9 @@ export class EventsService {
     const groups = await this.prisma.eventLike.groupBy({
       by: ['eventId'],
       where: { eventId: { in: eventIds } },
-      _count: { _all: true },
+      _sum: { value: true },
     });
-    return new Map(groups.map((group) => [group.eventId, group._count._all]));
+    return new Map(groups.map((group) => [group.eventId, group._sum.value ?? 0]));
   }
 
   private async loadHistory(
