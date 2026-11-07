@@ -18,10 +18,8 @@ model Event {
   initiator   User   @relation("EventInitiator", fields: [initiatorId], references: [id])
   initiatorId String
 
-  /// Teacher of the initiator's class who moderates the event. Null while the
-  /// class has no teacher: the first teacher who registers into it gets the event.
-  teacher   User?   @relation("EventTeacher", fields: [teacherId], references: [id], onDelete: Restrict)
-  teacherId String?
+  // No moderator column: the moderators are derived from the status. ON_MODERATION:
+  // every TEACHER of the initiator's class; ON_ADMIN_MODERATION: every ADMIN.
 
   votes EventVote[]
   likes EventLike[]
@@ -35,6 +33,5 @@ model Event {
   updatedAt DateTime @updatedAt
 
   @@index([initiatorId])
-  @@index([teacherId, status])
   @@index([status, createdAt])
 }

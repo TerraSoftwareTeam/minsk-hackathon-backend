@@ -96,12 +96,12 @@ export class EventResponseDto {
   initiator!: EventUserResponseDto;
 
   @ApiProperty({
-    type: EventUserResponseDto,
-    nullable: true,
+    type: [EventUserResponseDto],
     description:
-      "Teacher who moderates the event. Null while the author's class has no teacher: the first teacher who registers into the class gets the event",
+      "Who may decide on the event now. ON_MODERATION: every teacher of the author's class (empty while the class has none: " +
+      'a teacher who registers into it moderates the event at once). ON_ADMIN_MODERATION: every admin. Empty in every other status',
   })
-  teacher!: EventUserResponseDto | null;
+  moderators!: EventUserResponseDto[];
 
   @ApiProperty({
     type: [EventUserResponseDto],

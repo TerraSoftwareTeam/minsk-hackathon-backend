@@ -25,8 +25,8 @@ export class AuthController {
       'If a user with this schoolsById exists (ADMIN included), logs them in and ignores the other fields. ' +
       'Otherwise creates a new user from name, surname and role (required then); class is required for PUPIL/TEACHER ' +
       'and must be omitted for ADMIN. ' +
-      'A pupil may register into a class that has no teacher yet; their events wait without a teacher, ' +
-      'and a new teacher of the class takes all of them for moderation. ' +
+      'A pupil may register into a class that has no teacher yet; their events wait for one, ' +
+      'and every teacher of the class (also one who registers later) moderates them. ' +
       'Returns a JWT access token either way. Public endpoint, no auth required.',
   })
   @ApiBody({

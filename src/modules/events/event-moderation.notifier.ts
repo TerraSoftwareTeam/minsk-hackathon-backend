@@ -35,7 +35,6 @@ const MAX_REASON_IN_PUSH = 200;
 type NotifiedEvent = {
   id: string;
   name: string;
-  teacherId: string;
   initiator: { name: string; surname: string; class: string | null };
 };
 
@@ -48,19 +47,32 @@ export class EventModerationNotifier {
     private readonly push: PushService,
   ) {}
 
-  awaitsTeacher(event: NotifiedEvent): void {
+  awaitsTeachers(event: NotifiedEvent): void {
     const { name, surname, class: className } = event.initiator;
-    this.run(() =>
-      this.push.sendToUsers([event.teacherId], {
-        title: 'Новое мероприятие на модерации',
-        body: `«${event.name}» — ${surname} ${name}${className ? `, ${className}` : ''}`,
-        data: {
-          type: MODERATION_PUSH_TYPES.TEACHER,
-          eventId: event.id,
-          status: EventStatuses.ON_MODERATION,
+    if (!className) {
+      return;
+    }
+    this.run(async () => {
+      const teachers = await this.prisma.user.findMany({
+        where: { role: UserRoles.TEACHER, class: className },
+        select: { id: true },
+      });
+      if (teachers.length === 0) {
+        return;
+      }
+      await this.push.sendToUsers(
+        teachers.map((teacher) => teacher.id),
+        {
+          title: 'Новое мероприятие на модерации',
+          body: `«${event.name}» — ${surname} ${name}, ${className}`,
+          data: {
+            type: MODERATION_PUSH_TYPES.TEACHER,
+            eventId: event.id,
+            status: EventStatuses.ON_MODERATION,
+          },
         },
-      }),
-    );
+      );
+    });
   }
 
   awaitsAdmin(eventId: string): void {

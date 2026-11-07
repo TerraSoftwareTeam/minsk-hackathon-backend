@@ -31,8 +31,13 @@ const user = (over: Partial<User>): User => ({
 const pupil = user({ id: 'pupil-1', schoolsById: 'p1', class: '10A' });
 const otherPupil = user({ id: 'pupil-2', schoolsById: 'p2', class: '10A' });
 const teacher = user({ id: 'teacher-1', schoolsById: 't1', class: '10A', role: UserRoles.TEACHER });
+const coTeacher = user({ id: 'teacher-3', schoolsById: 't3', name: 'Co', class: '10A', role: UserRoles.TEACHER });
 const otherTeacher = user({ id: 'teacher-2', schoolsById: 't2', class: '11B', role: UserRoles.TEACHER });
 const admin = user({ id: 'admin-1', role: UserRoles.ADMIN });
+const otherAdmin = user({ id: 'admin-2', schoolsById: 'a2', name: 'A2', role: UserRoles.ADMIN });
+const ALL_USERS = [pupil, otherPupil, teacher, coTeacher, otherTeacher, admin, otherAdmin];
+
+const asEventUser = (u: User) => ({ name: u.name, surname: u.surname });
 
 const DAY_MS = 24 * 3600 * 1000;
 const FUTURE = new Date(Date.now() + 7 * DAY_MS);
@@ -42,7 +47,6 @@ const OVERDUE = new Date(Date.now() - 31 * DAY_MS);
 
 const WITH_USERS_INCLUDE = {
   initiator: true,
-  teacher: true,
   image: { select: { url: true } },
   votes: { select: { voter: true }, orderBy: { createdAt: 'asc' } },
 };
@@ -63,9 +67,7 @@ const storedEvent = (over: Partial<EventWithUsers> = {}): EventWithUsers => ({
   voteThreshold: 10,
   startsAt: null,
   initiatorId: pupil.id,
-  teacherId: teacher.id,
   initiator: pupil,
-  teacher,
   createdAt: RECENT,
   updatedAt: RECENT,
   imageId: null,
@@ -77,7 +79,7 @@ const storedEvent = (over: Partial<EventWithUsers> = {}): EventWithUsers => ({
 describe('EventsService', () => {
   let service: EventsService;
   let prisma: {
-    user: { findFirst: jest.Mock };
+    user: { findMany: jest.Mock };
     event: {
       create: jest.Mock;
       findMany: jest.Mock;
@@ -89,7 +91,7 @@ describe('EventsService', () => {
     $transaction: jest.Mock;
   };
   let images: { uploadImage: jest.Mock; deleteImage: jest.Mock };
-  let notifier: { awaitsTeacher: jest.Mock; awaitsAdmin: jest.Mock; decisionMade: jest.Mock };
+  let notifier: { awaitsTeachers: jest.Mock; awaitsAdmin: jest.Mock; decisionMade: jest.Mock };
   let tx: {
     $queryRaw: jest.Mock;
     eventVote: { create: jest.Mock; count: jest.Mock; deleteMany: jest.Mock };
@@ -98,7 +100,15 @@ describe('EventsService', () => {
 
   beforeEach(() => {
     prisma = {
-      user: { findFirst: jest.fn().mockResolvedValue(teacher) },
+      user: {
+        findMany: jest.fn(({ where }: { where: { role: UserRoles; class?: { in: string[] } } }) =>
+          Promise.resolve(
+            ALL_USERS.filter(
+              (u) => u.role === where.role && (!where.class || where.class.in.includes(u.class!)),
+            ),
+          ),
+        ),
+      },
       event: {
         create: jest.fn().mockResolvedValue(storedEvent()),
         findMany: jest.fn().mockResolvedValue([storedEvent()]),
@@ -132,7 +142,7 @@ describe('EventsService', () => {
       uploadImage: jest.fn().mockResolvedValue({ id: 'img-new', url: 'https://cdn/new.jpg' }),
       deleteImage: jest.fn().mockResolvedValue(undefined),
     };
-    notifier = { awaitsTeacher: jest.fn(), awaitsAdmin: jest.fn(), decisionMade: jest.fn() };
+    notifier = { awaitsTeachers: jest.fn(), awaitsAdmin: jest.fn(), decisionMade: jest.fn() };
     service = new EventsService(
       prisma as unknown as PrismaService,
       images as unknown as ImagesService,
@@ -141,13 +151,9 @@ describe('EventsService', () => {
   });
 
   describe('create', () => {
-    it('pupil creates an ON_MODERATION event assigned to the teacher of their class', async () => {
+    it('pupil creates an ON_MODERATION event moderated by every teacher of their class', async () => {
       const result = await service.create(pupil, { name: 'Trip', scope: Scopes.GRADE, voteThreshold: 10, category: EventCategories.SPORTS });
 
-      expect(prisma.user.findFirst).toHaveBeenCalledWith({
-        where: { role: UserRoles.TEACHER, class: '10A' },
-        orderBy: { id: 'asc' },
-      });
       expect(prisma.event.create.mock.calls[0][0].data).toEqual({
         name: 'Trip',
         description: undefined,
@@ -156,11 +162,10 @@ describe('EventsService', () => {
         voteThreshold: 10,
         status: EventStatuses.ON_MODERATION,
         initiatorId: pupil.id,
-        teacherId: teacher.id,
       });
-      expect(result.initiator).toEqual({ name: pupil.name, surname: pupil.surname });
-      expect(result.teacher).toEqual({ name: teacher.name, surname: teacher.surname });
-      expect(notifier.awaitsTeacher).toHaveBeenCalledWith(storedEvent());
+      expect(result.initiator).toEqual(asEventUser(pupil));
+      expect(result.moderators).toEqual([asEventUser(teacher), asEventUser(coTeacher)]);
+      expect(notifier.awaitsTeachers).toHaveBeenCalledWith(storedEvent());
     });
 
     it.each([
@@ -173,40 +178,11 @@ describe('EventsService', () => {
       expect(prisma.event.create).not.toHaveBeenCalled();
     });
 
-    it('class without a teacher: ON_MODERATION with no teacher, nobody pushed', async () => {
-      prisma.user.findFirst.mockResolvedValue(null);
-      prisma.event.create.mockResolvedValue(storedEvent({ teacherId: null, teacher: null }));
-
-      const result = await service.create(pupil, { name: 'Trip', voteThreshold: 10, category: EventCategories.SPORTS });
-
-      expect(prisma.event.create.mock.calls[0][0].data).toMatchObject({
-        status: EventStatuses.ON_MODERATION,
-        teacherId: null,
-      });
-      expect(result.teacher).toBeNull();
-      expect(prisma.event.updateMany).not.toHaveBeenCalled();
-      expect(notifier.awaitsTeacher).not.toHaveBeenCalled();
-    });
-
-    it('a teacher who registered during the creation gets the event and the push', async () => {
-      prisma.user.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce(teacher);
-      prisma.event.create.mockResolvedValue(storedEvent({ teacherId: null, teacher: null }));
-      prisma.event.findUnique.mockResolvedValue(storedEvent());
-
-      const result = await service.create(pupil, { name: 'Trip', voteThreshold: 10, category: EventCategories.SPORTS });
-
-      expect(prisma.event.updateMany).toHaveBeenCalledWith({
-        where: { teacherId: null, initiator: { class: '10A' } },
-        data: { teacherId: teacher.id },
-      });
-      expect(result.teacher).toEqual({ name: teacher.name, surname: teacher.surname });
-      expect(notifier.awaitsTeacher).toHaveBeenCalledWith(storedEvent());
-    });
-
-    it('an event without a teacher can be read by its author, not moderated by any teacher', async () => {
-      prisma.event.findUnique.mockResolvedValue(storedEvent({ teacherId: null, teacher: null }));
-      await expect(service.findOne(pupil, 'event-1')).resolves.toMatchObject({ teacher: null });
-      await expect(service.approve(teacher, 'event-1')).rejects.toBeInstanceOf(ForbiddenException);
+    it('class without a teacher: no moderators until one registers', async () => {
+      prisma.event.findUnique.mockResolvedValue(
+        storedEvent({ initiator: { ...pupil, class: '9A' } }),
+      );
+      await expect(service.findOne(admin, 'event-1')).resolves.toMatchObject({ moderators: [] });
     });
 
     it('BadRequest when the pupil has no class', async () => {
@@ -245,7 +221,7 @@ describe('EventsService', () => {
 
       expect(prisma.event.findMany).toHaveBeenCalledWith({
         where: {
-          teacherId: teacher.id,
+          initiator: { class: '10A' },
           status: EventStatuses.ON_MODERATION,
           createdAt: { gt: expect.any(Date) },
         },
@@ -260,10 +236,55 @@ describe('EventsService', () => {
     });
   });
 
+  describe('moderators', () => {
+    it('ON_MODERATION: every teacher of the author\'s class, not of other classes', async () => {
+      const result = await service.findOne(admin, 'event-1');
+      expect(result.moderators).toEqual([asEventUser(teacher), asEventUser(coTeacher)]);
+    });
+
+    it('ON_ADMIN_MODERATION: every admin', async () => {
+      prisma.event.findUnique.mockResolvedValue(storedEvent({ status: EventStatuses.ON_ADMIN_MODERATION }));
+      const result = await service.findOne(admin, 'event-1');
+      expect(result.moderators).toEqual([asEventUser(admin), asEventUser(otherAdmin)]);
+    });
+
+    it.each([
+      EventStatuses.ON_VOTE,
+      EventStatuses.DECLINED,
+      EventStatuses.FINALIZED,
+      EventStatuses.DECLINED_BY_ADMIN,
+      EventStatuses.EXPIRED,
+    ])('%s: nobody', async (status) => {
+      prisma.event.findUnique.mockResolvedValue(storedEvent({ status }));
+      const result = await service.findOne(admin, 'event-1');
+      expect(result.moderators).toEqual([]);
+      expect(prisma.user.findMany).not.toHaveBeenCalled();
+    });
+
+    it('a list loads the teachers of all the classes and the admins once', async () => {
+      prisma.event.findMany.mockResolvedValueOnce([
+        storedEvent(),
+        storedEvent({ id: 'e2', initiator: { ...pupil, class: '11B' } }),
+        storedEvent({ id: 'e3', status: EventStatuses.ON_ADMIN_MODERATION }),
+      ]);
+      prisma.event.findMany.mockResolvedValue([]);
+
+      const result = await service.findForModeration(teacher);
+
+      expect(result.map((event) => event.moderators)).toEqual([
+        [asEventUser(teacher), asEventUser(coTeacher)],
+        [asEventUser(otherTeacher)],
+        [asEventUser(admin), asEventUser(otherAdmin)],
+      ]);
+      expect(prisma.user.findMany).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('findOne', () => {
     it.each([
       ['initiator', pupil],
-      ['assigned teacher', teacher],
+      ['teacher of the class', teacher],
+      ['another teacher of the class', coTeacher],
       ['admin', admin],
     ])('%s can read the event', async (_name, actor) => {
       await expect(service.findOne(actor, 'event-1')).resolves.toMatchObject({ id: 'event-1' });
@@ -283,12 +304,15 @@ describe('EventsService', () => {
   });
 
   describe('approve / decline', () => {
-    it('assigned teacher approves: ON_MODERATION -> ON_VOTE', async () => {
+    it.each([
+      ['a teacher of the class', teacher],
+      ['another teacher of the class', coTeacher],
+    ])('%s approves: ON_MODERATION -> ON_VOTE', async (_name, actor) => {
       prisma.event.findUnique
         .mockResolvedValueOnce(storedEvent())
         .mockResolvedValueOnce(storedEvent({ status: EventStatuses.ON_VOTE }));
 
-      const result = await service.approve(teacher, 'event-1');
+      const result = await service.approve(actor, 'event-1');
 
       expect(prisma.event.updateMany).toHaveBeenCalledWith({
         where: {
@@ -306,7 +330,7 @@ describe('EventsService', () => {
       );
     });
 
-    it('assigned teacher declines with a reason', async () => {
+    it('a teacher of the class declines with a reason', async () => {
       await service.decline(teacher, 'event-1', { reason: 'Pick another date' });
       expect(prisma.event.updateMany.mock.calls[0][0].data).toEqual({
         status: EventStatuses.DECLINED,
@@ -382,7 +406,7 @@ describe('EventsService', () => {
         { name: 'N', surname: 'S' },
       ]);
       expect(result.initiator).toEqual({ name: pupil.name, surname: pupil.surname });
-      expect(result.teacher).toEqual({ name: teacher.name, surname: teacher.surname });
+      expect(result.moderators).toEqual([]);
     });
   });
 
@@ -583,7 +607,7 @@ describe('EventsService', () => {
     });
 
     it.each([
-      ['assigned teacher', teacher],
+      ['teacher of the class', teacher],
       ['initiator', pupil],
     ])('%s cannot moderate as admin', async (_name, actor) => {
       await expect(service.adminApprove(actor, 'event-1', approval)).rejects.toBeInstanceOf(

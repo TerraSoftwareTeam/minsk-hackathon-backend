@@ -6,7 +6,6 @@ import { VotingEventResponseDto } from './dto/voting-event-response.dto';
 
 export type EventWithUsers = Event & {
   initiator: User;
-  teacher: User | null;
   image: { url: string } | null;
   votes: { voter: User }[];
 };
@@ -18,11 +17,12 @@ function toEventUser(user: User): EventUserResponseDto {
 export type EventComputed = {
   successProbability: number;
   likesCount: number;
+  moderators: User[];
 };
 
 export function toEventResponse(
   event: EventWithUsers,
-  { successProbability, likesCount }: EventComputed,
+  { successProbability, likesCount, moderators }: EventComputed,
 ): EventResponseDto {
   return {
     id: event.id,
@@ -39,7 +39,7 @@ export function toEventResponse(
     imageUrl: event.image?.url ?? null,
     likesCount,
     initiator: toEventUser(event.initiator),
-    teacher: event.teacher ? toEventUser(event.teacher) : null,
+    moderators: moderators.map(toEventUser),
     voters: event.votes.map((vote) => toEventUser(vote.voter)),
     votesCount: event.votes.length,
     createdAt: event.createdAt,

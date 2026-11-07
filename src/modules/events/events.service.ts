@@ -35,7 +35,6 @@ import {
   computeSuccessProbability,
 } from './event-probability';
 import { DecisionStatus, EventModerationNotifier } from './event-moderation.notifier';
-import { assignEventsWithoutTeacher } from './teacher-assignment';
 import { EventLikeResponseDto } from './dto/event-like-response.dto';
 import {
   EventComputed,
@@ -53,7 +52,6 @@ export const LIKABLE_STATUSES = [
 
 const WITH_USERS = {
   initiator: true,
-  teacher: true,
   image: { select: { url: true } },
   votes: { select: { voter: true }, orderBy: { createdAt: 'asc' } },
 } as const;
@@ -73,8 +71,8 @@ type ModerationStage = {
 
 const TEACHER_MODERATION: ModerationStage = {
   from: EventStatuses.ON_MODERATION,
-  mayModerate: (actor, event) => actor.id === event.teacherId,
-  forbiddenMessage: 'Only the assigned teacher can moderate this event',
+  mayModerate: (actor, event) => isTeacherOfClass(actor, event.initiator.class),
+  forbiddenMessage: "Only a teacher of the author's class can moderate this event",
   lateMessage: 'Too late to moderate: the event was not decided within a month of its creation',
 };
 
@@ -102,9 +100,7 @@ export class EventsService {
     if (!actor.class) {
       throw new BadRequestException('Pupil has no class assigned');
     }
-    const teacher = await this.findClassTeacher(actor.class);
-
-    let event = await this.withPrismaErrors(() =>
+    const event = await this.withPrismaErrors(() =>
       this.prisma.event.create({
         data: {
           name: dto.name,
@@ -114,21 +110,11 @@ export class EventsService {
           voteThreshold: dto.voteThreshold,
           status: EventStatuses.ON_MODERATION,
           initiatorId: actor.id,
-          teacherId: teacher?.id ?? null,
         },
         include: WITH_USERS,
       }),
     );
-    if (!teacher) {
-      const lateTeacher = await this.findClassTeacher(actor.class);
-      if (lateTeacher) {
-        await assignEventsWithoutTeacher(this.prisma, lateTeacher.id, actor.class);
-        event = await this.findEventOrThrow(event.id);
-      }
-    }
-    if (event.teacherId) {
-      this.notifier.awaitsTeacher({ ...event, teacherId: event.teacherId });
-    }
+    this.notifier.awaitsTeachers(event);
     return this.toResponse(event);
   }
 
@@ -141,9 +127,12 @@ export class EventsService {
     if (actor.role !== UserRoles.TEACHER) {
       throw new ForbiddenException('Only a teacher has a moderation list');
     }
+    if (!actor.class) {
+      throw new BadRequestException('Teacher has no class assigned');
+    }
     const events = await this.prisma.event.findMany({
       where: {
-        teacherId: actor.id,
+        initiator: { class: actor.class },
         status: EventStatuses.ON_MODERATION,
         createdAt: { gt: deadlineCutoff() },
       },
@@ -420,16 +409,60 @@ export class EventsService {
     if (events.length === 0) {
       return [];
     }
-    const [history, likes] = await Promise.all([
+    const [history, likes, moderatorsOf] = await Promise.all([
       this.loadHistory(events),
       this.loadLikeCounts(events.map((event) => event.id)),
+      this.loadModerators(events),
     ]);
     return events.map((event) =>
       map(event, {
         successProbability: computeSuccessProbability(event.category, event.startsAt, history, event.id),
         likesCount: likes.get(event.id) ?? 0,
+        moderators: moderatorsOf(event),
       }),
     );
+  }
+
+  private async loadModerators(events: EventWithUsers[]): Promise<(event: EventWithUsers) => User[]> {
+    const classes = new Set<string>();
+    let needAdmins = false;
+    for (const event of events) {
+      if (event.status === EventStatuses.ON_MODERATION && event.initiator.class) {
+        classes.add(event.initiator.class);
+      } else if (event.status === EventStatuses.ON_ADMIN_MODERATION) {
+        needAdmins = true;
+      }
+    }
+    const byName = {
+      orderBy: [{ surname: 'asc' }, { name: 'asc' }, { id: 'asc' }],
+    } satisfies Prisma.UserFindManyArgs;
+    const [teachers, admins] = await Promise.all([
+      classes.size > 0
+        ? this.prisma.user.findMany({
+            where: { role: UserRoles.TEACHER, class: { in: [...classes] } },
+            ...byName,
+          })
+        : Promise.resolve([]),
+      needAdmins
+        ? this.prisma.user.findMany({ where: { role: UserRoles.ADMIN }, ...byName })
+        : Promise.resolve([]),
+    ]);
+    const teachersByClass = new Map<string, User[]>();
+    for (const teacher of teachers) {
+      const list = teachersByClass.get(teacher.class!) ?? [];
+      list.push(teacher);
+      teachersByClass.set(teacher.class!, list);
+    }
+    return (event) => {
+      switch (event.status) {
+        case EventStatuses.ON_MODERATION:
+          return (event.initiator.class && teachersByClass.get(event.initiator.class)) || [];
+        case EventStatuses.ON_ADMIN_MODERATION:
+          return admins;
+        default:
+          return [];
+      }
+    };
   }
 
   private async loadLikeCounts(eventIds: string[]): Promise<Map<string, number>> {
@@ -545,7 +578,7 @@ export class EventsService {
     return (
       actor.role === UserRoles.ADMIN ||
       actor.id === event.initiatorId ||
-      actor.id === event.teacherId
+      isTeacherOfClass(actor, event.initiator.class)
     );
   }
 
@@ -577,13 +610,6 @@ export class EventsService {
     return this.toResponse(await this.findEventOrThrow(id));
   }
 
-  private findClassTeacher(className: string): Promise<User | null> {
-    return this.prisma.user.findFirst({
-      where: { role: UserRoles.TEACHER, class: className },
-      orderBy: { id: 'asc' },
-    });
-  }
-
   private async findEventOrThrow(id: string): Promise<EventWithUsers> {
     const event = await this.prisma.event.findUnique({ where: { id }, include: WITH_USERS });
     if (!event) {
@@ -602,6 +628,10 @@ export class EventsService {
       throw error;
     }
   }
+}
+
+function isTeacherOfClass(actor: User, className: string | null): boolean {
+  return actor.role === UserRoles.TEACHER && actor.class !== null && actor.class === className;
 }
 
 function gradeOf(className: string | null): number | null {

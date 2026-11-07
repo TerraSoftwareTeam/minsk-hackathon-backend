@@ -14,11 +14,10 @@
  *   TEACHER  { "role": "TEACHER", "schoolsById": "seed-teacher-10A" }
  *   PUPIL    { "role": "PUPIL",   "schoolsById": "seed-pupil-10A-1" }   (1..6, classes 8B 9A 10A 10B 11A)
  *
- * Class 9A has no teacher: its events wait with teacherId = null. Register a teacher
- * into it to see them taken over:
+ * Class 9A has no teacher: its ON_MODERATION events have no moderators. Register a
+ * teacher into it and they moderate them at once:
  *   POST /auth/register { "schoolsById": "my-teacher-9A", "name": "Ирина", "surname": "Петрова",
  *                         "role": "TEACHER", "class": "9A" }
- * If a teacher of 9A already exists (registered by hand), the seed gives the events to them.
  */
 import 'dotenv/config';
 import { createHash } from 'node:crypto';
@@ -651,18 +650,9 @@ async function main(): Promise<void> {
           },
         });
       }
-      // Teacher of each class: the seed one, or for a class without a seed teacher
-      // whoever registered into it by hand (null if nobody has yet).
-      const teachers = new Map<ClassName, string | null>();
       for (const cls of CLASS_NAMES) {
         const seedTeacher = CLASSES[cls].teacher;
-        if (!seedTeacher) {
-          const existing = await tx.user.findFirst({
-            where: { role: UserRoles.TEACHER, class: cls },
-            select: { id: true },
-          });
-          teachers.set(cls, existing?.id ?? null);
-        } else {
+        if (seedTeacher) {
           const [name, surname] = seedTeacher;
           const teacher = {
             name,
@@ -676,7 +666,6 @@ async function main(): Promise<void> {
             create: { id: teacherId(cls), ...teacher },
             update: teacher,
           });
-          teachers.set(cls, teacherId(cls));
         }
         for (const [i, [pName, pSurname]] of CLASSES[cls].pupils.entries()) {
           const pupil = {
@@ -723,7 +712,6 @@ async function main(): Promise<void> {
             // Only the admin sets the date, on approval.
             startsAt: event.status === FINALIZED ? planned : null,
             initiatorId: initiator,
-            teacherId: teachers.get(event.cls) ?? null,
             createdAt,
           },
         });

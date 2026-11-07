@@ -63,7 +63,7 @@ export class EventsController {
   @ApiOperation({
     summary: 'Create an event request',
     description:
-      "Pupil only. The event gets status ON_MODERATION and is sent to the teacher of the pupil's class. " +
+      "Pupil only. The event gets status ON_MODERATION and is moderated by every teacher of the pupil's class (they all get a push). " +
       'It has no date: an admin sets startsAt on approval. votingClosesAt (createdAt + 1 month) is computed: ' +
       'teacher moderation, voting and the admin decision must finish by then.',
   })
@@ -71,7 +71,7 @@ export class EventsController {
   @ApiCreatedResponse({ type: EventResponseDto })
   @ApiBadRequestResponse({
     description:
-      "Validation failed (incl. an unknown field such as startsAt), or the pupil's class has no teacher",
+      "Validation failed (incl. an unknown field such as startsAt)",
   })
   @ApiForbiddenResponse({ description: 'Caller is not a pupil' })
   @ApiConflictResponse({ description: 'Event with this name already exists' })
@@ -110,7 +110,7 @@ export class EventsController {
   @ApiOperation({
     summary: "Teacher's moderation list",
     description:
-      'Teacher only. Events assigned to the caller with status ON_MODERATION, oldest first. Events past their deadline (a month after creation) are hidden.',
+      "Teacher only. Events of pupils of the caller's class with status ON_MODERATION, oldest first. Events past their deadline (a month after creation) are hidden.",
   })
   @ApiOkResponse({ type: [EventResponseDto] })
   @ApiForbiddenResponse({ description: 'Caller is not a teacher' })
@@ -159,7 +159,7 @@ export class EventsController {
   @Get(':id')
   @ApiOperation({
     summary: 'Get an event with all its data',
-    description: 'Initiator, assigned teacher or admin.',
+    description: "Initiator, any teacher of the initiator's class, or admin.",
   })
   @ApiUuidParam()
   @ApiOkResponse({ type: EventResponseDto })
@@ -176,11 +176,11 @@ export class EventsController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Approve an event',
-    description: 'Assigned teacher only. ON_MODERATION -> ON_VOTE.',
+    description: "Any teacher of the author's class. ON_MODERATION -> ON_VOTE. The first decision wins.",
   })
   @ApiUuidParam()
   @ApiOkResponse({ type: EventResponseDto })
-  @ApiForbiddenResponse({ description: 'Caller is not the assigned teacher' })
+  @ApiForbiddenResponse({ description: "Caller is not a teacher of the author's class" })
   @ApiNotFoundResponse({ description: 'Event not found' })
   @ApiConflictResponse({
     description:
@@ -198,12 +198,12 @@ export class EventsController {
   @ApiOperation({
     summary: 'Decline an event',
     description:
-      'Assigned teacher only. ON_MODERATION -> DECLINED, with an optional reason.',
+      "Any teacher of the author's class. ON_MODERATION -> DECLINED, with an optional reason. The first decision wins.",
   })
   @ApiUuidParam('reason is empty or longer than 2000 characters')
   @ApiBody({ type: DeclineEventDto, required: false })
   @ApiOkResponse({ type: EventResponseDto })
-  @ApiForbiddenResponse({ description: 'Caller is not the assigned teacher' })
+  @ApiForbiddenResponse({ description: "Caller is not a teacher of the author's class" })
   @ApiNotFoundResponse({ description: 'Event not found' })
   @ApiConflictResponse({
     description:

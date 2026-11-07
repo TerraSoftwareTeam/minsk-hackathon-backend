@@ -7,7 +7,6 @@ model User {
   role        UserRoles @default(PUPIL)
 
   initiatedEvents Event[]       @relation("EventInitiator")
-  teacherEvents   Event[]       @relation("EventTeacher")
   eventVotes      EventVote[]
   eventLikes      EventLike[]
   uploadedImages  Image[]       @relation("UploadedImages")

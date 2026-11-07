@@ -22,16 +22,20 @@ describe('EventModerationNotifier', () => {
     );
   });
 
-  it('notifies the assigned teacher about a new event', async () => {
-    notifier.awaitsTeacher({
+  it('notifies every teacher of the class about a new event', async () => {
+    prisma.user.findMany.mockResolvedValue([{ id: 'teacher-1' }, { id: 'teacher-2' }]);
+    notifier.awaitsTeachers({
       id: 'event-1',
       name: 'Trip',
-      teacherId: 'teacher-1',
       initiator: { name: 'Ivan', surname: 'Ivanov', class: '10A' },
     });
     await flush();
 
-    expect(push.sendToUsers).toHaveBeenCalledWith(['teacher-1'], {
+    expect(prisma.user.findMany).toHaveBeenCalledWith({
+      where: { role: UserRoles.TEACHER, class: '10A' },
+      select: { id: true },
+    });
+    expect(push.sendToUsers).toHaveBeenCalledWith(['teacher-1', 'teacher-2'], {
       title: expect.any(String),
       body: '«Trip» — Ivanov Ivan, 10A',
       data: {
@@ -40,6 +44,18 @@ describe('EventModerationNotifier', () => {
         status: EventStatuses.ON_MODERATION,
       },
     });
+  });
+
+  it('pushes nobody while the class has no teacher', async () => {
+    prisma.user.findMany.mockResolvedValue([]);
+    notifier.awaitsTeachers({
+      id: 'event-1',
+      name: 'Trip',
+      initiator: { name: 'Ivan', surname: 'Ivanov', class: '9A' },
+    });
+    await flush();
+
+    expect(push.sendToUsers).not.toHaveBeenCalled();
   });
 
   it('notifies every admin about an event that collected its votes', async () => {
